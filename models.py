@@ -62,18 +62,17 @@ class CameraCapture(db.Model):
 # --- 3. BEÁLLÍTÁSOK (Konfiguráció) ---
 # OCP: Új beállítások hozzáadása nem igényli a kódbázis (táblaszerkezet) módosítását.
 # KISS: Egyszerű Kulcs-Érték pár (Key-Value pair).
-class Settings(db.Model):
+class Setting(db.Model):
     __tablename__ = 'settings'
     
-    id = db.Column(db.Integer, primary_key=True)
-    key = db.Column(db.String(50), unique=True, nullable=False)  # pl. "target_humidity"
+    key = db.Column(db.String(50), unique=True, nullable=False, primary_key=True)  # pl. "target_humidity"
     value = db.Column(db.String(50), nullable=False)             # pl. "90"
     description = db.Column(db.String(100), nullable=True)       # pl. "Cél páratartalom (%)"
 
     @staticmethod
     def get_value(key, default=None):
         """Segédfüggvény a könnyű lekérdezéshez (KISS)"""
-        setting = Settings.query.filter_by(key=key).first()
+        setting = Setting.query.filter_by(key=key).first()
         return setting.value if setting else default
 
 # --- 4. RENDSZER NAPLÓ (Log) ---

@@ -1,0 +1,29 @@
+# GombaBox - Raspberry Pi projekt dependencies
+
+# GPIO vezérlés
+RPI.GPIO
+gpiozero
+
+# I2C Szenzorok
+adafruit-blinka
+adafruit-circuitpython-bme280  # BME280 (hőmérséklet, páratartalom, nyomás)
+adafruit-circuitpython-bh1750  # BH1750 (fényszenzor)
+
+# Soros kommunikáció
+pyserial  # MH-Z19C CO2 szenzor (UART)
+
+# Numerikus műveletek
+numpy
+
+# Web szerver & adatbázis
+flask
+flask-sqlalchemy
+
+# Ütemezés
+APScheduler
+
+# Kép feldolgozás
+Pillow
+
+# Opcionális: GPIO hardver gyorsítás (fallback-el működik nélküle)
+# lgpio

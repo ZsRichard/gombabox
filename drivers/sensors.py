@@ -1,12 +1,13 @@
 import random
 import logging
+import serial
+import board
+import busio
 
 # Hardveres könyvtárak importálása biztonságosan
 try:
-    import board
-    import adafruit_bme280
-    import adafruit_bh1750
-    import adafruit_scd30
+    from adafruit_bme280.basic import Adafruit_BME280_I2C
+    from adafruit_bh1750 import BH1750
     I2C_AVAILABLE = True
 except ImportError:
     I2C_AVAILABLE = False
@@ -22,28 +23,61 @@ class SensorDriver:
 class RealSensorDriver(SensorDriver):
     def __init__(self):
         if not I2C_AVAILABLE:
-            raise RuntimeError("I2C könyvtárak hiányoznak!")
+            logger.warning("⚠️ I2C könyvtárak nem elérhetők. Fallback MockSensorDriver-re.")
+            self.mock = MockSensorDriver()
+            self.is_mock = True
+            return
         
+        self.is_mock = False
         try:
-            i2c = board.I2C()
-            self.bme = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=0x76)
-            self.scd = adafruit_scd30.SCD30(i2c)
-            self.light = adafruit_bh1750.BH1750(i2c)
-            logger.info("✅ RealSensorDriver: Szenzorok csatlakoztatva.")
+            # I2C busz inicializálása
+            self.i2c = busio.I2C(board.SCL, board.SDA)
+            
+            # BME280 csatlakoztatása
+            self.bme = Adafruit_BME280_I2C(self.i2c, address=0x76)
+            
+            # BH1750 (Fényszenzor) csatlakoztatása
+            self.light_sensor = BH1750(self.i2c, address=0x23)
+            
+            logger.info("✅ I2C szenzorok (BME280, BH1750) csatlakoztatva.")
         except Exception as e:
-            logger.error(f"Hiba a szenzorok indításakor: {e}")
-            # Itt lehetne retry logika, de KISS: ha nem megy, omoljon össze inicializáláskor
+            logger.error(f"I2C Hiba: {e}")
             raise e
 
+        # 2. Serial (MH-Z19C) - opcionális
+        try:
+            self.ser = serial.Serial('/dev/serial0', 9600, timeout=1)
+            logger.info("✅ Soros port (MH-Z19C) megnyitva.")
+        except Exception as e:
+            logger.warning(f"Serial Hiba: {e}")
+            self.ser = None
+
+    def _read_mhz19(self):
+        """MH-Z19C CO2 olvasás nyers bájtokkal."""
+        if not self.ser: return 0
+        try:
+            # Parancs: Olvass CO2 koncentrációt
+            command = b"\xff\x01\x86\x00\x00\x00\x00\x00\x79"
+            self.ser.write(command)
+            res = self.ser.read(9)
+            if len(res) == 9 and res[0] == 0xff and res[1] == 0x86:
+                return res[2] * 256 + res[3]
+        except Exception as e:
+            logger.error(f"CO2 olvasási hiba: {e}")
+        return 0
+
     def read_all(self):
+        # Ha mock módban vagyunk, delegálj
+        if self.is_mock:
+            return self.mock.read_all()
+            
         # Valós adat olvasása
-        # Megjegyzés: Az SCD30 lassú lehet, itt egyszerűsítünk
         return {
             'temp': round(self.bme.temperature, 1),
-            'hum': round(self.bme.relative_humidity, 1),
+            'hum': round(self.bme.humidity, 1),
             'press': round(self.bme.pressure, 1),
-            'co2': int(self.scd.CO2) if self.scd.data_available else 0,
-            'light': int(self.light.lux)
+            'co2': self._read_mhz19(),  # MH-Z19C soros portról
+            'light': int(self.light_sensor.lux)
         }
 
 class MockSensorDriver(SensorDriver):
