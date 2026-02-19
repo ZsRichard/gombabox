@@ -41,9 +41,10 @@ logger = logging.getLogger(__name__)
 class BackgroundTaskManager:
     """Manages background tasks following Single Responsibility Principle."""
     
-    def __init__(self, app_instance, db_session):
+    def __init__(self, app_instance, db_session, relay_driver_instance):
         self.app = app_instance
         self.db = db_session
+        self.relay_driver = relay_driver_instance
         self.thread = None
         self.running = False
         
@@ -73,16 +74,14 @@ class BackgroundTaskManager:
             if USE_MOCK_HARDWARE:
                 logger.info("SIMULATION MODE ACTIVE - Using mock hardware")
                 sensors = MockSensorDriver()
-                relays = MockRelayDriver()
                 camera = MockCameraDriver()
             else:
                 logger.info("HARDWARE MODE - Using real hardware")
                 sensors = RealSensorDriver()
-                relays = RealRelayDriver()
                 camera = RealCameraDriver()
 
-            # Create controller
-            controller = MushroomController(sensors, relays, camera, self.db)
+            # Create controller (reuse shared relay driver)
+            controller = MushroomController(sensors, self.relay_driver, camera, self.db)
 
             # Main loop
             while self.running:
@@ -95,8 +94,22 @@ class BackgroundTaskManager:
                 time.sleep(BACKGROUND_CYCLE_INTERVAL)
 
 
-# Global instance  
-task_manager = BackgroundTaskManager(app, db.session)
+# Shared relay driver for manual control via API
+def _create_relay_driver():
+    """Create relay driver instance (real or mock based on config)."""
+    if USE_MOCK_HARDWARE:
+        return MockRelayDriver()
+    try:
+        return RealRelayDriver()
+    except Exception as e:
+        logger.error(f"Failed to initialize RealRelayDriver: {e}")
+        logger.info("Falling back to mock relay driver")
+        return MockRelayDriver()
+
+relay_driver = _create_relay_driver()
+
+# Global instances
+task_manager = BackgroundTaskManager(app, db.session, relay_driver)
 
 
 # REST API Routes
@@ -199,22 +212,40 @@ def settings_endpoint(key):
         elif request.method == 'POST':
             if not request.json or 'value' not in request.json:
                 return jsonify({'error': 'Invalid request'}), 400
-                
-            Config.set(key, request.json.get('value'))
-            return jsonify({'status': 'ok', 'key': key, 'value': request.json.get('value')})
+            
+            new_value = request.json.get('value')
+            Config.set(key, new_value)
+            logger.info(f"Setting '{key}' updated to '{new_value}'")
+            return jsonify({'status': 'ok', 'key': key, 'value': new_value})
     except Exception as e:
         logger.error(f"Error handling settings for {key}: {e}")
+        logger.exception(e)
         return jsonify({'error': 'Failed to handle setting'}), 500
 
 
 @app.route('/api/relay/<int:relay_id>', methods=['GET', 'POST'])
 def relay_control(relay_id):
-    """Control individual relay (not yet implemented)."""
-    # TODO: Implement real relay control interface
+    """Control individual relay - GET returns state, POST toggles it."""
     if relay_id not in [1, 2, 3]:
         return jsonify({'error': 'Invalid relay ID'}), 400
     
-    return jsonify({'relay_id': relay_id, 'status': 'ok'})
+    try:
+        if request.method == 'GET':
+            state = relay_driver.get_state(relay_id)
+            return jsonify({'relay_id': relay_id, 'state': state})
+        
+        # POST - set relay state
+        if not request.json or 'state' not in request.json:
+            return jsonify({'error': 'Missing state parameter'}), 400
+        
+        state = bool(request.json.get('state'))
+        relay_driver.set_state(relay_id, state)
+        logger.info(f"Manual relay control: Relay {relay_id} set to {'ON' if state else 'OFF'}")
+        return jsonify({'relay_id': relay_id, 'state': state})
+    
+    except Exception as e:
+        logger.error(f"Relay control error (relay {relay_id}): {e}")
+        return jsonify({'error': 'Failed to control relay'}), 500
 
 
 @app.route('/api/health', methods=['GET'])
@@ -247,6 +278,53 @@ def stop_system():
     except Exception as e:
         logger.error(f"Error stopping system: {e}")
         return jsonify({'error': 'Failed to stop system'}), 500
+
+
+@app.route('/api/camera/capture', methods=['POST'])
+def capture_now():
+    """Trigger manual camera capture."""
+    try:
+        from drivers.camera import RealCameraDriver, MockCameraDriver
+        from core.vision import ImageAnalyzer
+        
+        # Use same camera driver as background task
+        if USE_MOCK_HARDWARE:
+            camera = MockCameraDriver()
+        else:
+            camera = RealCameraDriver()
+        
+        # Capture image
+        image_path = camera.capture_image()
+        
+        if not image_path:
+            return jsonify({'error': 'Failed to capture image'}), 500
+        
+        # Analyze coverage
+        coverage_percent = ImageAnalyzer.calculate_mycelium_coverage(image_path)
+        
+        # Save to database
+        import os
+        filename = os.path.basename(image_path)
+        capture = CameraCapture(
+            filename=filename,
+            analysis_result=f"{coverage_percent}%"
+        )
+        db.session.add(capture)
+        db.session.commit()
+        
+        logger.info(f"Manual capture: {filename}, Coverage: {coverage_percent}%")
+        
+        return jsonify({
+            'status': 'ok',
+            'filename': filename,
+            'coverage': coverage_percent,
+            'path': f"/static/captures/{filename}"
+        })
+        
+    except Exception as e:
+        logger.error(f"Manual capture error: {e}")
+        logger.exception(e)
+        return jsonify({'error': 'Failed to capture image'}), 500
 
 
 # Flask Application Startup

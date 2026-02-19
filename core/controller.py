@@ -42,14 +42,15 @@ class MushroomController:
 
     def run_cycle(self):
         """
-        Main cycle: sensor measurements every minute, visual inspection hourly.
+        Main cycle: sensor measurements every minute, visual inspection configurable.
         """
         # Sensor cycle: every minute
         self.run_sensor_cycle()
         
-        # Visual inspection: after 60 minutes (hourly)
+        # Visual inspection: configurable interval (default 60 minutes)
+        camera_interval = int(Config.get('camera_interval'))
         self.visual_cycle_counter += 1
-        if self.visual_cycle_counter >= 60:  # 60 minutes later
+        if self.visual_cycle_counter >= camera_interval:
             self.run_visual_inspection()
             self.visual_cycle_counter = 0
 

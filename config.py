@@ -12,7 +12,8 @@ DEFAULTS = {
     'light_on_hour': 8,         # Light on time (hour)
     'light_off_hour': 20,       # Light off time (hour)
     'fan_cycle_on': 5,          # Fan cycle: duration on (minutes)
-    'fan_cycle_off': 55         # Fan cycle: duration off (minutes)
+    'fan_cycle_off': 55,        # Fan cycle: duration off (minutes)
+    'camera_interval': 60       # Camera capture interval (minutes)
 }
 
 class Config:
@@ -34,8 +35,8 @@ class Config:
             default_val = DEFAULTS[key]
             # Also save it so it's available next time (Self-healing)
             new_setting = Setting(key=key, value=str(default_val))
-            db.add(new_setting)
-            db.commit()
+            db.session.add(new_setting)
+            db.session.commit()
             return default_val
         
         return None  # If nowhere to be found (programmer error)
@@ -49,9 +50,9 @@ class Config:
             setting.value = str(value)
         else:
             setting = Setting(key=key, value=str(value))
-            db.add(setting)
+            db.session.add(setting)
         
-        db.commit()
+        db.session.commit()
 
     @staticmethod
     def _cast_value(value_str, key):

@@ -88,7 +88,7 @@ Task Scheduler: APScheduler (background processes)
 
 ## Development Phases
 
-### Phase 1: Stabilize Backend (CURRENT)
+### Phase 1: Stabilize Backend
 - [ ] Unit test all drivers
 - [ ] Integration test sensor lifecycle
 - [ ] Validate database persistence

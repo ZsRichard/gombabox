@@ -6,8 +6,10 @@ const REFRESH_INTERVAL = 5000; // 5 seconds
 const CHART_MAX_POINTS = 20;
 
 // Chart instances
-let tempHumChart = null;
-let co2LightChart = null;
+let tempChart = null;
+let humidityChart = null;
+let co2Chart = null;
+let lightChart = null;
 let coverageChart = null;
 
 // Data storage
@@ -55,94 +57,113 @@ function initializeCharts() {
         }
     };
 
-    // Temperature & Humidity Chart
-    const tempHumCtx = document.getElementById('temp-hum-chart');
-    if (tempHumCtx) {
-        tempHumChart = new Chart(tempHumCtx, {
+    // Temperature Chart
+    const tempCtx = document.getElementById('temp-chart');
+    if (tempCtx) {
+        tempChart = new Chart(tempCtx, {
             type: 'line',
             data: {
                 labels: sensorHistory.timestamps,
-                datasets: [
-                    {
-                        label: 'Temperature (°C)',
-                        data: sensorHistory.temp,
-                        borderColor: '#e74c3c',
-                        backgroundColor: 'rgba(231, 76, 60, 0.1)',
-                        tension: 0.4,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Humidity (%)',
-                        data: sensorHistory.hum,
-                        borderColor: '#3498db',
-                        backgroundColor: 'rgba(52, 152, 219, 0.1)',
-                        tension: 0.4,
-                        yAxisID: 'y1'
-                    }
-                ]
+                datasets: [{
+                    label: 'Temperature (°C)',
+                    data: sensorHistory.temp,
+                    borderColor: '#e74c3c',
+                    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
             },
             options: {
                 ...chartOptions,
                 scales: {
                     y: {
-                        type: 'linear',
-                        display: true,
-                        position: 'left',
+                        beginAtZero: false,
                         title: { display: true, text: 'Temperature (°C)' }
-                    },
-                    y1: {
-                        type: 'linear',
-                        display: true,
-                        position: 'right',
-                        title: { display: true, text: 'Humidity (%)' },
-                        grid: { drawOnChartArea: false }
                     }
                 }
             }
         });
     }
 
-    // CO₂ & Light Chart
-    const co2LightCtx = document.getElementById('co2-light-chart');
-    if (co2LightCtx) {
-        co2LightChart = new Chart(co2LightCtx, {
+    // Humidity Chart
+    const humCtx = document.getElementById('humidity-chart');
+    if (humCtx) {
+        humidityChart = new Chart(humCtx, {
             type: 'line',
             data: {
                 labels: sensorHistory.timestamps,
-                datasets: [
-                    {
-                        label: 'CO₂ (ppm)',
-                        data: sensorHistory.co2,
-                        borderColor: '#f39c12',
-                        backgroundColor: 'rgba(243, 156, 18, 0.1)',
-                        tension: 0.4,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Light (lux)',
-                        data: sensorHistory.light,
-                        borderColor: '#2ecc71',
-                        backgroundColor: 'rgba(46, 204, 113, 0.1)',
-                        tension: 0.4,
-                        yAxisID: 'y1'
-                    }
-                ]
+                datasets: [{
+                    label: 'Humidity (%)',
+                    data: sensorHistory.hum,
+                    borderColor: '#3498db',
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
             },
             options: {
                 ...chartOptions,
                 scales: {
                     y: {
-                        type: 'linear',
-                        display: true,
-                        position: 'left',
+                        beginAtZero: true,
+                        max: 100,
+                        title: { display: true, text: 'Humidity (%)' }
+                    }
+                }
+            }
+        });
+    }
+
+    // CO₂ Chart
+    const co2Ctx = document.getElementById('co2-chart');
+    if (co2Ctx) {
+        co2Chart = new Chart(co2Ctx, {
+            type: 'line',
+            data: {
+                labels: sensorHistory.timestamps,
+                datasets: [{
+                    label: 'CO₂ (ppm)',
+                    data: sensorHistory.co2,
+                    borderColor: '#f39c12',
+                    backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    y: {
+                        beginAtZero: true,
                         title: { display: true, text: 'CO₂ (ppm)' }
-                    },
-                    y1: {
-                        type: 'linear',
-                        display: true,
-                        position: 'right',
-                        title: { display: true, text: 'Light (lux)' },
-                        grid: { drawOnChartArea: false }
+                    }
+                }
+            }
+        });
+    }
+
+    // Light Chart
+    const lightCtx = document.getElementById('light-chart');
+    if (lightCtx) {
+        lightChart = new Chart(lightCtx, {
+            type: 'line',
+            data: {
+                labels: sensorHistory.timestamps,
+                datasets: [{
+                    label: 'Light (lux)',
+                    data: sensorHistory.light,
+                    borderColor: '#2ecc71',
+                    backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Light (lux)' }
                     }
                 }
             }
@@ -485,21 +506,59 @@ function stopSystem() {
 }
 
 /**
+ * Capture image now
+ */
+function captureNow() {
+    const button = event.target.closest('button');
+    const originalText = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Capturing...';
+    
+    fetch(`${API_BASE}/camera/capture`, { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                alert('Error: ' + data.error);
+            } else {
+                alert(`Image captured! Coverage: ${data.coverage.toFixed(2)}%`);
+                loadCameraData();
+            }
+        })
+        .catch(error => {
+            alert('Capture error: ' + error);
+        })
+        .finally(() => {
+            button.disabled = false;
+            button.innerHTML = originalText;
+        });
+}
+
+/**
  * Update all charts
  */
 function updateCharts() {
-    if (tempHumChart) {
-        tempHumChart.data.labels = sensorHistory.timestamps;
-        tempHumChart.data.datasets[0].data = sensorHistory.temp;
-        tempHumChart.data.datasets[1].data = sensorHistory.hum;
-        tempHumChart.update('none'); // Don't animate
+    if (tempChart) {
+        tempChart.data.labels = sensorHistory.timestamps;
+        tempChart.data.datasets[0].data = sensorHistory.temp;
+        tempChart.update('none'); // Don't animate
     }
 
-    if (co2LightChart) {
-        co2LightChart.data.labels = sensorHistory.timestamps;
-        co2LightChart.data.datasets[0].data = sensorHistory.co2;
-        co2LightChart.data.datasets[1].data = sensorHistory.light;
-        co2LightChart.update('none');
+    if (humidityChart) {
+        humidityChart.data.labels = sensorHistory.timestamps;
+        humidityChart.data.datasets[0].data = sensorHistory.hum;
+        humidityChart.update('none');
+    }
+
+    if (co2Chart) {
+        co2Chart.data.labels = sensorHistory.timestamps;
+        co2Chart.data.datasets[0].data = sensorHistory.co2;
+        co2Chart.update('none');
+    }
+
+    if (lightChart) {
+        lightChart.data.labels = sensorHistory.timestamps;
+        lightChart.data.datasets[0].data = sensorHistory.light;
+        lightChart.update('none');
     }
 
     if (coverageChart) {
