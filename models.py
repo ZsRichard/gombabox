@@ -1,26 +1,26 @@
 from flask_sqlalchemy import SQLAlchemy
 import datetime
 
-# Inicializálás (Dependency Injection előkészítése)
+# Database initialization using SQLAlchemy
+# Enables dependency injection for improved testability and loose coupling
 db = SQLAlchemy()
 
 def init_db(app):
     """
-    Az adatbázis inicializálása az alkalmazáshoz.
-    Ez lehetővé teszi a 'db' objektum befecskendezését (Dependency Injection),
-    növelve a tesztelhetőséget és csökkentve a csatoltságot.
+    Initialize database with Flask application.
+    Enables SQLAlchemy dependency injection pattern for better testability
+    and reduced coupling between components.
     """
     db.init_app(app)
     with app.app_context():
         db.create_all()
 
-# --- 1. MÉRÉSEK (Szenzor adat) ---
-# SRP: Csak a környezeti változók tárolása.
 class Measurement(db.Model):
+    """Environmental sensor measurements (SRP: Data persistence only)."""
     __tablename__ = 'measurements'
     
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.datetime.now, index=True) # Indexelés a gyors lekérdezésért
+    timestamp = db.Column(db.DateTime, default=datetime.datetime.now, index=True)  # Indexed for fast queries
     
     temperature = db.Column(db.Float, nullable=False)
     humidity = db.Column(db.Float, nullable=False)
@@ -29,7 +29,7 @@ class Measurement(db.Model):
     light = db.Column(db.Float, nullable=False)
 
     def to_dict(self):
-        """Segédfüggvény a JSON konverzióhoz (API)"""
+        """Serialize measurement to JSON format for API responses."""
         return {
             'time': self.timestamp.strftime('%Y-%m-%d %H:%M'),
             'temp': self.temperature,
@@ -39,18 +39,15 @@ class Measurement(db.Model):
             'light': self.light
         }
 
-# --- 2. KAMERA (Képek metaadatai) ---
-# SRP: A fájlrendszerben lévő képek nyilvántartása.
 class CameraCapture(db.Model):
+    """Camera capture metadata (SRP: Track images in file system)."""
     __tablename__ = 'camera_captures'
     
     id = db.Column(db.Integer, primary_key=True)
     timestamp = db.Column(db.DateTime, default=datetime.datetime.now, index=True)
     filename = db.Column(db.String(120), nullable=False)
     
-    # Opcionális: Később, ha akarod elemezni a képet (pl. "80% átszőtt"), ide írhatod.
-    # YAGNI: Most még nem kell bonyolult elemző modul, csak egy hely az adatnak.
-    analysis_result = db.Column(db.String(200), nullable=True)
+    analysis_result = db.Column(db.String(200), nullable=True)  # Future: Store mycelium coverage percentage
 
     def to_dict(self):
         return {
@@ -59,25 +56,22 @@ class CameraCapture(db.Model):
             'analysis': self.analysis_result
         }
 
-# --- 3. BEÁLLÍTÁSOK (Konfiguráció) ---
-# OCP: Új beállítások hozzáadása nem igényli a kódbázis (táblaszerkezet) módosítását.
-# KISS: Egyszerű Kulcs-Érték pár (Key-Value pair).
 class Setting(db.Model):
+    """Application configuration (OCP: Extensible without schema changes)."""
     __tablename__ = 'settings'
     
-    key = db.Column(db.String(50), unique=True, nullable=False, primary_key=True)  # pl. "target_humidity"
-    value = db.Column(db.String(50), nullable=False)             # pl. "90"
-    description = db.Column(db.String(100), nullable=True)       # pl. "Cél páratartalom (%)"
+    key = db.Column(db.String(50), unique=True, nullable=False, primary_key=True)  # e.g., 'target_humidity'
+    value = db.Column(db.String(50), nullable=False)  # e.g., '90'
+    description = db.Column(db.String(100), nullable=True)  # e.g., 'Target humidity (%)'
 
     @staticmethod
     def get_value(key, default=None):
-        """Segédfüggvény a könnyű lekérdezéshez (KISS)"""
+        """Retrieve setting value from database (KISS principle)."""
         setting = Setting.query.filter_by(key=key).first()
         return setting.value if setting else default
 
-# --- 4. RENDSZER NAPLÓ (Log) ---
-# SRP: A működési események elválasztása a mért adatoktól.
 class SystemLog(db.Model):
+    """System events and operational logs (SRP: Separated from measurements)."""
     __tablename__ = 'system_logs'
     
     id = db.Column(db.Integer, primary_key=True)

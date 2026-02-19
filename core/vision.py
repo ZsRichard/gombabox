@@ -11,51 +11,51 @@ logger = logging.getLogger(__name__)
 
 class ImageAnalyzer:
     """
-    Kizárólag a képelemzésért felelős osztály (SRP).
-    Nem tud semmit a kameráról vagy az adatbázisról.
+    Responsible solely for image analysis (SRP).
+    Does not know about the camera or the database.
     """
     
     @staticmethod
     def calculate_mycelium_coverage(image_path: str) -> float:
         """
-        Kiszámolja a micélium (fehér területek) arányát százalékban.
+        Calculates the mycelium (white areas) ratio as a percentage.
         """
         if not image_path:
             return 0.0
             
         try:
-            # PIL-ből numpy array-re
+            # Convert PIL image to numpy array
             pil_image = Image.open(image_path)
             rgb_image = np.array(pil_image.convert('RGB'))
 
-            # BGR-ből HSV konverzió (PIL RGB-ből kell)
-            # Normalizálunk 0-1 tartományra, majd HSV-re
+            # RGB color space (PIL uses RGB not BGR)
+            # Normalize to 0-1 range to 0-255
             image_normalized = rgb_image.astype(np.float32) / 255.0
             
-            # RGB to HSV konverzió (manual, mivel PIL nem támogatja közvetlenül)
-            # De egyszerűb: fehér szín detektálása a RGB térben
-            # Fehér: R, G, B > 150, és egyformák
+            # RGB to HSV conversion (manual, since PIL doesn't support directly)
+            # But simpler: detect white color in RGB space
+            # White: R, G, B > 150, and equal
             
-            # Alternatíva: PIL Image módot HSV-re konvertálni
-            # De egyszerü megoldás: fehér pixel detektálása RGB-ben
+            # Alternative: convert PIL Image mode to HSV
+            # But simple solution: detect white pixels in RGB space
             
             r = rgb_image[:, :, 0].astype(np.float32)
             g = rgb_image[:, :, 1].astype(np.float32)
             b = rgb_image[:, :, 2].astype(np.float32)
             
-            # Fehér szín: magas értékek minden csatornán, és hasonló értékek
-            # Általános megközelítés: grayscale értéke > 180 és alacsony szaturáció
+            # White color: high values on all channels, and similar values
+            # General approach: grayscale value > 180 and low saturation
             gray = (r + g + b) / 3.0
             max_val = np.maximum(np.maximum(r, g), b)
             min_val = np.minimum(np.minimum(r, g), b)
             
-            # Szaturáció: (max - min) / max
+            # Saturation: (max - min) / max
             saturation = np.where(max_val > 0, (max_val - min_val) / max_val, 0)
             
-            # Fehér pixel: magas érték és alacsony szaturáció
+            # White pixel: high value and low saturation
             white_mask = (gray > MYCELIUM_LOWER_V) & (saturation < 0.2)
             
-            # Számítás
+            # Calculate
             total_pixels = white_mask.size
             white_pixels = np.sum(white_mask)
             
@@ -66,5 +66,5 @@ class ImageAnalyzer:
             return round(coverage_percentage, 2)
 
         except Exception as e:
-            logger.error(f"Hiba a képfeldolgozás során: {e}")
+            logger.error(f"Error during image processing: {e}")
             return 0.0

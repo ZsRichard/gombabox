@@ -1,7 +1,7 @@
 import logging
 
-# Próbáljuk importálni a hardveres könyvtárat.
-# Ha nincs (pl. a laptopodon fejleszted), nem omlik össze, csak jelzi.
+# Try to import the hardware library.
+# If not available (e.g., developing on a laptop), it won't crash, just a flag.
 try:
     from gpiozero import OutputDevice
     GPIO_AVAILABLE = True
@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 class RelayDriver:
     """
-    Ez az 'Absztrakt' ősosztály vagy Interfész.
-    Meghatározza, mit KELL tudnia egy relé vezérlőnek.
+    Abstract base class or interface.
+    Defines what a relay controller must be able to do.
     """
     def set_state(self, relay_id, state):
         raise NotImplementedError
@@ -23,21 +23,21 @@ class RelayDriver:
 
 class RealRelayDriver(RelayDriver):
     """
-    A VALÓDI hardver vezérlője.
-    Csak akkor használd, ha a Raspberry Pi-n futsz.
+    Real hardware controller.
+    Use this only if running on a Raspberry Pi.
     """
     def __init__(self):
         if not GPIO_AVAILABLE:
-            raise RuntimeError("GPIO könyvtár nem elérhető! Használd a Mock drivert.")
+            raise RuntimeError("GPIO library not available! Use Mock driver instead.")
         
-        # Hardveres bekötés (Configból is jöhetne, de KISS: itt fixáljuk)
-        # PIN kiosztás a korábbi beszélgetésünk alapján:
+        # Hardware connection (could come from Config, but KISS: fixed here)
+        # PIN assignments from previous conversation:
         self.devices = {
-            1: OutputDevice(27, active_high=False, initial_value=False), # Venti
-            2: OutputDevice(17, active_high=False, initial_value=False), # Párásító
-            3: OutputDevice(22, active_high=False, initial_value=False)  # LED
+            1: OutputDevice(27, active_high=False, initial_value=False), # Fan
+            2: OutputDevice(17, active_high=False, initial_value=False), # Humidifier
+            3: OutputDevice(22, active_high=False, initial_value=False)  # Light
         }
-        logger.info("✅ RealRelayDriver inicializálva (GPIO módban).")
+        logger.info("RealRelayDriver initialized (GPIO mode).")
 
     def set_state(self, relay_id, state):
         if relay_id in self.devices:
@@ -46,7 +46,7 @@ class RealRelayDriver(RelayDriver):
                 device.on()
             else:
                 device.off()
-            # Itt nem logolunk minden kapcsolást, azt a Business Layer végzi majd (SRP).
+            # We don't log every switch here; Business Layer handles that (SRP).
             
     def get_state(self, relay_id):
         if relay_id in self.devices:
@@ -55,19 +55,19 @@ class RealRelayDriver(RelayDriver):
 
 class MockRelayDriver(RelayDriver):
     """
-    A SZIMULÁLT vezérlő (Teszt Dublőr)[cite: 781].
-    Távollétben és fejlesztéshez ezt használjuk.
+    Mock/simulated controller (Test Double pattern).
+    Used for absence and development.
     """
     def __init__(self):
-        # Memóriában tároljuk az állapotot
+        # Store state in memory
         self.states = {1: False, 2: False, 3: False}
-        logger.info("⚠️ MockRelayDriver inicializálva (Szimulációs mód).")
+        logger.info("MockRelayDriver initialized (Simulation mode).")
 
     def set_state(self, relay_id, state):
         if relay_id in self.states:
             self.states[relay_id] = state
-            # Konzolra írjuk, hogy lásd a működést fejlesztés közben
-            print(f"   [MOCK HARDWARE] Relé {relay_id} -> {'BE' if state else 'KI'}")
+            # Print to console so you can see it working during development
+            print(f"   [MOCK HARDWARE] Relay {relay_id} -> {'ON' if state else 'OFF'}")
 
     def get_state(self, relay_id):
         return self.states.get(relay_id, False)
