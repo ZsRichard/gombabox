@@ -79,10 +79,9 @@ class RealCameraDriver(CameraDriver):
                 '--autofocus-on-capture',             # Trigger AF scan at capture time
                 '--autofocus-speed', 'fast',          # Faster focus acquisition
                 '-t', '5000',                         # Timeout: 5000ms for macro focus (must update CAMERA_FOCUS_TIME_MS if changed)
-                '-q', '95',                           # High JPEG quality
+                '-q', '100',                           # High JPEG quality
                 '--sharpness', '1.5',                 # Enhanced edge sharpness for macro blur combat
-                '--contrast', '1.2',                  # Increased contrast for mycelium visibility
-                '--denoise', 'cdn_fast'               # Fast denoising to improve edge clarity
+
             ]
             
             result = subprocess.run(cmd, capture_output=True, timeout=10)
