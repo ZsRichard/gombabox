@@ -6,7 +6,7 @@ import logging
 import subprocess
 from datetime import datetime
 from PIL import Image
-from core.constants import CAPTURE_DIRECTORY
+from core.constants import get_capture_directory
 
 logger = logging.getLogger(__name__)
 
@@ -45,21 +45,26 @@ class RealCameraDriver(CameraDriver):
         # If rpicam is not available, use Mock
         if not self.rpicam_available:
             return self.mock.capture_image()
-            
+        
+        # Get the appropriate capture directory (SSD or SD card fallback)
+        capture_dir = get_capture_directory()
+        
         # Ensure the directory exists
-        os.makedirs(CAPTURE_DIRECTORY, exist_ok=True)
+        os.makedirs(capture_dir, exist_ok=True)
         
         filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        filepath = os.path.join(CAPTURE_DIRECTORY, filename)
+        filepath = os.path.join(capture_dir, filename)
         
         try:
             # rpicam-still command: takes a photo at 1920x1080 resolution
+            # -t 1000: waits up to 1000ms for auto-focus before capturing
+            # This must be synchronized with LED flash lead time in controller._prepare_camera_light()
             cmd = [
                 'rpicam-still',
                 '-o', filepath,
                 '--width', '1920',
                 '--height', '1080',
-                '-t', '1000'  # timeout: 1000ms
+                '-t', '1000'  # focus timeout: 1000ms (must match CAMERA_FOCUS_TIME_MS in controller.py)
             ]
             
             result = subprocess.run(cmd, capture_output=True, timeout=10)
@@ -84,9 +89,12 @@ class MockCameraDriver(CameraDriver):
     Generates a black image with white spots (simulated mycelium).
     """
     def capture_image(self) -> str:
-        os.makedirs(CAPTURE_DIRECTORY, exist_ok=True)
+        # Get the appropriate capture directory (SSD or SD card fallback)
+        capture_dir = get_capture_directory()
+        
+        os.makedirs(capture_dir, exist_ok=True)
         filename = f"mock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        filepath = os.path.join(CAPTURE_DIRECTORY, filename)
+        filepath = os.path.join(capture_dir, filename)
         
         # Black background (soil)
         height, width = 480, 640

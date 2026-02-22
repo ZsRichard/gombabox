@@ -1,11 +1,11 @@
 import random
 import logging
 import serial
-import board
-import busio
 
 # Import hardware libraries safely
 try:
+    import board
+    import busio
     from adafruit_bme280.basic import Adafruit_BME280_I2C
     from adafruit_bh1750 import BH1750
     I2C_AVAILABLE = True

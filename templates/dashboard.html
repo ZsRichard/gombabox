@@ -228,6 +228,24 @@
                                 <button class="btn btn-danger w-100" onclick="stopSystem()">
                                     <i class="fas fa-stop"></i> Stop System
                                 </button>
+                                <button class="btn btn-warning w-100 mt-2" onclick="restartSystem()">
+                                    <i class="fas fa-rotate"></i> Restart Service
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card mt-4">
+                            <div class="card-header">
+                                <i class="fas fa-seedling"></i> Growth Phase
+                            </div>
+                            <div class="card-body">
+                                <label for="growth-phase" class="form-label">Phase</label>
+                                <select id="growth-phase" class="form-select">
+                                    <option value="colonization">Colonization</option>
+                                    <option value="fruiting">Fruiting</option>
+                                </select>
+                                <button class="btn btn-primary w-100 mt-2" onclick="saveGrowthPhase()">
+                                    Save Phase
+                                </button>
                             </div>
                         </div>
                     </div>

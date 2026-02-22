@@ -13,7 +13,9 @@ DEFAULTS = {
     'light_off_hour': 20,       # Light off time (hour)
     'fan_cycle_on': 5,          # Fan cycle: duration on (minutes)
     'fan_cycle_off': 55,        # Fan cycle: duration off (minutes)
-    'camera_interval': 60       # Camera capture interval (minutes)
+    'camera_interval': 60,      # Camera capture interval (minutes)
+    'camera_light_lead_seconds': 5,  # LED lead time before capture (seconds)
+    'growth_phase': 'fruiting'  # colonization | fruiting
 }
 
 class Config:

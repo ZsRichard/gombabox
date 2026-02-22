@@ -32,6 +32,7 @@ document.addEventListener('DOMContentLoaded', function() {
     startAutoRefresh();
     loadControls();
     loadSettings();
+    loadGrowthPhase();
 });
 
 /**
@@ -254,25 +255,18 @@ function loadSensorData() {
  * Load latest camera capture and coverage analysis
  */
 function loadCameraData() {
-    fetch(`${API_BASE}/camera/captures?limit=1`)
+    fetch(`${API_BASE}/camera/latest`)
         .then(response => response.json())
         .then(data => {
             if (data.error) {
                 return;
             }
 
-            const captures = Array.isArray(data) ? data : (data.captures || []);
-            if (captures.length === 0) {
-                return;
-            }
-
-            const capture = captures[captures.length - 1];
-            const coveragePercent = parseFloat(capture.analysis || capture.analysis_result) || 0;
+            const coveragePercent = parseFloat(data.analysis || 0) || 0;
 
             // Update image
-            const imageUrl = capture.url || capture.image_path;
-            if (imageUrl) {
-                document.getElementById('latest-capture').src = imageUrl;
+            if (data.url) {
+                document.getElementById('latest-capture').src = data.url;
             }
             
             // Update coverage percentage and progress bar
@@ -327,6 +321,15 @@ function loadControls() {
 }
 
 /**
+ * Refresh all relay states to keep UI in sync
+ */
+function refreshRelayStates() {
+    document.querySelectorAll('.relay-toggle').forEach(toggle => {
+        loadRelayState(toggle.dataset.relayId, toggle);
+    });
+}
+
+/**
  * Load relay state from API
  */
 function loadRelayState(relayId, checkbox) {
@@ -370,6 +373,9 @@ function loadSettings() {
 
             let settingsHtml = '';
             Object.entries(data).forEach(([key, value]) => {
+                if (key === 'growth_phase') {
+                    return;
+                }
                 settingsHtml += `
                     <div class="mb-3">
                         <label for="setting-${key}" class="form-label">
@@ -390,6 +396,51 @@ function loadSettings() {
             document.getElementById('settings-form').innerHTML = settingsHtml;
         })
         .catch(error => console.error('Settings error:', error));
+}
+
+/**
+ * Load growth phase
+ */
+function loadGrowthPhase() {
+    fetch(`${API_BASE}/phase`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) return;
+            const select = document.getElementById('growth-phase');
+            if (select && data.phase) {
+                select.value = data.phase;
+            }
+        })
+        .catch(error => console.error('Phase error:', error));
+}
+
+/**
+ * Save growth phase
+ */
+function saveGrowthPhase() {
+    const select = document.getElementById('growth-phase');
+    if (!select) {
+        return;
+    }
+
+    fetch(`${API_BASE}/phase`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ phase: select.value })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error: ' + data.error);
+            return;
+        }
+        alert('Phase updated successfully!');
+    })
+    .catch(error => {
+        alert('Error updating phase: ' + error);
+    });
 }
 
 /**
@@ -506,6 +557,30 @@ function stopSystem() {
 }
 
 /**
+ * Restart system service
+ */
+function restartSystem() {
+    if (!confirm('Restart the gombabox service now?')) {
+        return;
+    }
+
+    fetch(`${API_BASE}/restart`, { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                alert('Error: ' + data.error);
+                return;
+            }
+            alert('Service restart requested. The UI may briefly disconnect.');
+            setTimeout(checkSystemStatus, 5000);
+        })
+        .catch(() => {
+            alert('Restart requested. Connection may drop while the service restarts.');
+            setTimeout(checkSystemStatus, 8000);
+        });
+}
+
+/**
  * Capture image now
  */
 function captureNow() {
@@ -584,6 +659,7 @@ function startAutoRefresh() {
         loadSensorData();
         loadCameraData();
         checkSystemStatus();
+        refreshRelayStates();
     }, REFRESH_INTERVAL);
 
     // Refresh logs every 30 seconds

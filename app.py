@@ -2,10 +2,29 @@
 # Main Flask application with REST API and hardware integration
 
 import os
+import sys
+
+
+def _ensure_venv():
+    """Re-exec into the local venv Python if available and not already active."""
+    if os.environ.get("GOMBABOX_SKIP_VENV") == "1":
+        return
+    if sys.prefix != sys.base_prefix:
+        return
+
+    venv_python = os.path.join(os.path.dirname(__file__), "venv", "bin", "python3")
+    if os.path.isfile(venv_python):
+        os.environ["GOMBABOX_SKIP_VENV"] = "1"
+        os.execv(venv_python, [venv_python] + sys.argv)
+
+
+_ensure_venv()
+
 import time
 import logging
 import threading
-from flask import Flask, jsonify, render_template, request
+import subprocess
+from flask import Flask, jsonify, render_template, request, send_file
 from flask_sqlalchemy import SQLAlchemy
 
 # Database
@@ -24,6 +43,7 @@ from drivers.camera import MockCameraDriver, RealCameraDriver
 
 # Core
 from core.controller import MushroomController
+from core.constants import get_latest_capture_path, SSD_CAPTURE_DIRECTORY
 
 # Configure Flask
 app = Flask(__name__)
@@ -112,6 +132,26 @@ relay_driver = _create_relay_driver()
 task_manager = BackgroundTaskManager(app, db.session, relay_driver)
 
 
+def _restart_service_async():
+    """Restart the gombabox systemd service in a background thread."""
+    def _restart_service():
+        time.sleep(0.5)
+        try:
+            result = subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'gombabox'],
+                capture_output=True,
+                text=True,
+                timeout=20
+            )
+
+            if result.returncode != 0:
+                logger.error(f"Service restart failed: {result.stderr}")
+        except Exception as restart_error:
+            logger.error(f"Service restart error: {restart_error}")
+
+    threading.Thread(target=_restart_service, daemon=True).start()
+
+
 # REST API Routes
 # REST API Routes
 
@@ -172,6 +212,52 @@ def get_camera_captures():
         return jsonify({'error': 'Failed to fetch captures'}), 500
 
 
+@app.route('/api/camera/latest', methods=['GET'])
+def get_latest_capture():
+    """Get the latest camera capture from either SSD or SD card."""
+    try:
+        filename, full_path, serve_path = get_latest_capture_path()
+        
+        if not filename:
+            return jsonify({'error': 'No captures available'}), 404
+        
+        # Construct the URL for the frontend
+        url = f"{serve_path}/{filename}"
+        
+        # Try to get analysis from database for this filename
+        capture = CameraCapture.query.filter_by(filename=filename).first()
+        analysis = capture.analysis_result if capture else "0"
+        
+        return jsonify({
+            'filename': filename,
+            'url': url,
+            'analysis': analysis,
+            'timestamp': capture.timestamp.isoformat() if capture else None
+        })
+    except Exception as e:
+        logger.error(f"Error fetching latest capture: {e}")
+        return jsonify({'error': 'Failed to fetch latest capture'}), 500
+
+
+@app.route('/captures/<filename>')
+def serve_ssd_capture(filename):
+    """Serve captures from SSD directory."""
+    try:
+        filepath = os.path.join(SSD_CAPTURE_DIRECTORY, filename)
+        
+        # Security check: ensure the file is within the allowed directory
+        if not os.path.abspath(filepath).startswith(os.path.abspath(SSD_CAPTURE_DIRECTORY)):
+            return jsonify({'error': 'Access denied'}), 403
+        
+        if not os.path.exists(filepath):
+            return jsonify({'error': 'File not found'}), 404
+        
+        return send_file(filepath, mimetype='image/jpeg')
+    except Exception as e:
+        logger.error(f"Error serving capture: {e}")
+        return jsonify({'error': 'Failed to serve file'}), 500
+
+
 @app.route('/api/system/logs', methods=['GET'])
 def get_system_logs():
     """Get system event logs with pagination."""
@@ -221,6 +307,32 @@ def settings_endpoint(key):
         logger.error(f"Error handling settings for {key}: {e}")
         logger.exception(e)
         return jsonify({'error': 'Failed to handle setting'}), 500
+
+
+@app.route('/api/phase', methods=['GET', 'POST'])
+def growth_phase():
+    """Get or set the current growth phase."""
+    try:
+        if request.method == 'GET':
+            phase = str(Config.get('growth_phase') or 'fruiting').strip().lower()
+            return jsonify({'phase': phase, 'allowed': ['colonization', 'fruiting']})
+
+        if not request.json or 'phase' not in request.json:
+            return jsonify({'error': 'Missing phase parameter'}), 400
+
+        phase = str(request.json.get('phase')).strip().lower()
+        if phase not in ['colonization', 'fruiting']:
+            return jsonify({'error': 'Invalid phase value'}), 400
+
+        Config.set('growth_phase', phase)
+        logger.info(f"Growth phase updated to '{phase}'")
+        _restart_service_async()
+        return jsonify({'status': 'restarting', 'phase': phase})
+
+    except Exception as e:
+        logger.error(f"Error handling growth phase: {e}")
+        logger.exception(e)
+        return jsonify({'error': 'Failed to handle growth phase'}), 500
 
 
 @app.route('/api/relay/<int:relay_id>', methods=['GET', 'POST'])
@@ -280,6 +392,18 @@ def stop_system():
         return jsonify({'error': 'Failed to stop system'}), 500
 
 
+@app.route('/api/restart', methods=['POST'])
+def restart_system():
+    """Restart the gombabox systemd service."""
+    try:
+        _restart_service_async()
+        return jsonify({'status': 'restarting'})
+    except Exception as e:
+        logger.error(f"Service restart error: {e}")
+        logger.exception(e)
+        return jsonify({'error': 'Failed to restart service'}), 500
+
+
 @app.route('/api/camera/capture', methods=['POST'])
 def capture_now():
     """Trigger manual camera capture."""
@@ -294,7 +418,24 @@ def capture_now():
             camera = RealCameraDriver()
         
         # Capture image
-        image_path = camera.capture_image()
+        lead_seconds = Config.get('camera_light_lead_seconds')
+        try:
+            lead_seconds = float(lead_seconds)
+        except (TypeError, ValueError):
+            lead_seconds = 0
+
+        light_was_on = relay_driver.get_state(3)
+        if not light_was_on:
+            relay_driver.set_state(3, True)
+
+        if lead_seconds > 0:
+            time.sleep(lead_seconds)
+
+        try:
+            image_path = camera.capture_image()
+        finally:
+            if not light_was_on:
+                relay_driver.set_state(3, False)
         
         if not image_path:
             return jsonify({'error': 'Failed to capture image'}), 500

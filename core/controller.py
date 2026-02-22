@@ -1,6 +1,7 @@
 import logging
 import datetime
 import os
+import time
 from config import Config
 from models import Measurement, SystemLog, CameraCapture
 from core.vision import ImageAnalyzer
@@ -12,6 +13,11 @@ RELAY_ID_LIGHT = 3      # LED Light
 
 # Constant for CO2 hysteresis (when to turn off ventilation)
 CO2_OFFSET_OFF = 200    # ppm
+
+# Camera focus time (milliseconds to wait for auto-focus before capture)
+# Must match rpicam-still -t timeout value
+CAMERA_FOCUS_TIME_MS = 1000  # milliseconds
+CAMERA_FOCUS_TIME_S = CAMERA_FOCUS_TIME_MS / 1000.0  # converted to seconds
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +71,15 @@ class MushroomController:
             
             # 2. Save (Measurement)
             self._save_measurement(sensor_data)
-            
+
             # 3. Evaluate and Actuate (Logic delegated to separate methods)
-            self._control_humidity(sensor_data.get('hum', 0))
-            self._control_light(sensor_data.get('light', 0))
-            self._control_air_quality(sensor_data.get('co2', 0))
+            phase = self._get_growth_phase()
+            if phase == 'colonization':
+                self._ensure_colonization_mode()
+            else:
+                self._control_humidity(sensor_data.get('hum', 0))
+                self._control_light(sensor_data.get('light', 0))
+                self._control_air_quality(sensor_data.get('co2', 0))
             
             # 4. Commit transaction
             self.db.commit()
@@ -86,7 +96,11 @@ class MushroomController:
         logger.info("Visual inspection started.")
         try:
             # 1. Image capture (Driver saves to filesystem)
-            image_path = self.camera.capture_image()
+            light_was_on = self._prepare_camera_light()
+            try:
+                image_path = self.camera.capture_image()
+            finally:
+                self._restore_camera_light(light_was_on)
             
             if not image_path:
                 self._log_system_event("ERROR", "Failed to capture image from camera.")
@@ -165,6 +179,61 @@ class MushroomController:
             if is_on:
                 self.relays.set_state(RELAY_ID_FAN, False)
                 self._log_system_event("INFO", f"Ventilation OFF (CO2: {current_co2} ppm)")
+
+    def _get_growth_phase(self):
+        phase = Config.get('growth_phase')
+        if not phase:
+            return 'fruiting'
+        return str(phase).strip().lower()
+
+    def _ensure_colonization_mode(self):
+        """Disable climate control and daily light during colonization."""
+        if self.relays.get_state(RELAY_ID_FAN):
+            self.relays.set_state(RELAY_ID_FAN, False)
+            self._log_system_event("INFO", "Ventilation OFF (Colonization phase)")
+
+        if self.relays.get_state(RELAY_ID_HUMIDIFIER):
+            self.relays.set_state(RELAY_ID_HUMIDIFIER, False)
+            self._log_system_event("INFO", "Humidifier OFF (Colonization phase)")
+
+        if self.relays.get_state(RELAY_ID_LIGHT):
+            self.relays.set_state(RELAY_ID_LIGHT, False)
+            self._log_system_event("INFO", "Light OFF (Colonization phase)")
+
+    def _prepare_camera_light(self):
+        """Turn on LED and wait for camera to focus before capture.
+        
+        Ensures proper LED synchronization with camera focus time:
+        - LED turns on to stabilize exposure
+        - Waits for configured lead time AND camera focus time
+        - Returns previous light state for restoration after capture
+        """
+        lead_seconds = Config.get('camera_light_lead_seconds')
+        try:
+            lead_seconds = float(lead_seconds)
+        except (TypeError, ValueError):
+            lead_seconds = 0
+
+        was_on = self.relays.get_state(RELAY_ID_LIGHT)
+
+        if not was_on:
+            self.relays.set_state(RELAY_ID_LIGHT, True)
+            self._log_system_event("INFO", "Camera light ON for capture")
+
+        # Ensure we wait for BOTH lead time AND camera focus time
+        # Lead time allows LED to stabilize, focus time allows camera auto-focus to complete
+        total_wait_seconds = lead_seconds + CAMERA_FOCUS_TIME_S
+        if total_wait_seconds > 0:
+            self._log_system_event("INFO", f"Waiting {total_wait_seconds:.1f}s for LED stabilization and camera focus")
+            time.sleep(total_wait_seconds)
+
+        return was_on
+
+    def _restore_camera_light(self, was_on):
+        """Restore LED to previous state after capture."""
+        if not was_on:
+            self.relays.set_state(RELAY_ID_LIGHT, False)
+            self._log_system_event("INFO", "Camera light OFF after capture")
 
     def _save_measurement(self, data):
         """Persisting sensor data."""
