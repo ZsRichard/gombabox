@@ -14,7 +14,7 @@ DEFAULTS = {
     'fan_cycle_on': 5,          # Fan cycle: duration on (minutes)
     'fan_cycle_off': 55,        # Fan cycle: duration off (minutes)
     'camera_interval': 60,      # Camera capture interval (minutes)
-    'camera_light_lead_seconds': 5,  # LED lead time before capture (seconds)
+    'camera_light_lead_seconds': 2,  # LED lead time before capture (seconds), plus 2s focus time = 4s total
     'growth_phase': 'fruiting'  # colonization | fruiting
 }
 

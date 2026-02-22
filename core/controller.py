@@ -16,7 +16,8 @@ CO2_OFFSET_OFF = 200    # ppm
 
 # Camera focus time (milliseconds to wait for auto-focus before capture)
 # Must match rpicam-still -t timeout value
-CAMERA_FOCUS_TIME_MS = 1000  # milliseconds
+# Increased to 2000ms for macro focus at 25-30cm distance with Camera Module v3
+CAMERA_FOCUS_TIME_MS = 2000  # milliseconds
 CAMERA_FOCUS_TIME_S = CAMERA_FOCUS_TIME_MS / 1000.0  # converted to seconds
 
 logger = logging.getLogger(__name__)

@@ -56,15 +56,33 @@ class RealCameraDriver(CameraDriver):
         filepath = os.path.join(capture_dir, filename)
         
         try:
-            # rpicam-still command: takes a photo at 1920x1080 resolution
-            # -t 1000: waits up to 1000ms for auto-focus before capturing
-            # This must be synchronized with LED flash lead time in controller._prepare_camera_light()
+            # rpicam-still command: optimized for high-quality macro focus at 25-30cm distance
+            # Camera Module v3 wide native resolution: 4608x2592 (11.9MP)
+            # (4056x3040 causes unwanted cropping/rescaling from native format)
+            # Focus parameters:
+            #   --autofocus-mode continuous: continuous auto-focus for sharp macro shots
+            #   --autofocus-range macro: optimized focus range for 25-30cm macro photography
+            #   --autofocus-on-capture: triggers AF scan just before capturing
+            #   --autofocus-speed fast: faster focus acquisition
+            # -t 2000: timeout of 2000ms for robust focus at macro distance
+            # -q 95: high JPEG quality for best image detail
+            # --sharpness 1.5: enhanced edge sharpness to combat macro blur
+            # --contrast 1.2: increased contrast for mycelium visibility
+            # --denoise cdn_fast: fast denoising to reduce edge artifacts
             cmd = [
                 'rpicam-still',
                 '-o', filepath,
-                '--width', '1920',
-                '--height', '1080',
-                '-t', '1000'  # focus timeout: 1000ms (must match CAMERA_FOCUS_TIME_MS in controller.py)
+                '--width', '4608',                    # Native sensor resolution - full width, no crop
+                '--height', '2592',                   # Native sensor resolution
+                '--autofocus-mode', 'continuous',     # Continuous auto-focus for macro
+                '--autofocus-range', 'macro',         # Optimize for 25-30cm macro distance
+                '--autofocus-on-capture',             # Trigger AF scan at capture time
+                '--autofocus-speed', 'fast',          # Faster focus acquisition
+                '-t', '2000',                         # Timeout: 2000ms for macro focus (must update CAMERA_FOCUS_TIME_MS if changed)
+                '-q', '95',                           # High JPEG quality
+                '--sharpness', '1.5',                 # Enhanced edge sharpness for macro blur combat
+                '--contrast', '1.2',                  # Increased contrast for mycelium visibility
+                '--denoise', 'cdn_fast'               # Fast denoising to improve edge clarity
             ]
             
             result = subprocess.run(cmd, capture_output=True, timeout=10)
