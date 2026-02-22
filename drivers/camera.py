@@ -64,7 +64,7 @@ class RealCameraDriver(CameraDriver):
             #   --autofocus-range macro: optimized focus range for 25-30cm macro photography
             #   --autofocus-on-capture: triggers AF scan just before capturing
             #   --autofocus-speed fast: faster focus acquisition
-            # -t 2000: timeout of 2000ms for robust focus at macro distance
+            # -t 5000: timeout of 5000ms for robust focus before capture
             # -q 95: high JPEG quality for best image detail
             # --sharpness 1.5: enhanced edge sharpness to combat macro blur
             # --contrast 1.2: increased contrast for mycelium visibility
@@ -78,7 +78,7 @@ class RealCameraDriver(CameraDriver):
                 '--autofocus-range', 'macro',         # Optimize for 25-30cm macro distance
                 '--autofocus-on-capture',             # Trigger AF scan at capture time
                 '--autofocus-speed', 'fast',          # Faster focus acquisition
-                '-t', '2000',                         # Timeout: 2000ms for macro focus (must update CAMERA_FOCUS_TIME_MS if changed)
+                '-t', '5000',                         # Timeout: 5000ms for macro focus (must update CAMERA_FOCUS_TIME_MS if changed)
                 '-q', '95',                           # High JPEG quality
                 '--sharpness', '1.5',                 # Enhanced edge sharpness for macro blur combat
                 '--contrast', '1.2',                  # Increased contrast for mycelium visibility
