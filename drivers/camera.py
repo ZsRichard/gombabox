@@ -52,7 +52,7 @@ class RealCameraDriver(CameraDriver):
         # Ensure the directory exists
         os.makedirs(capture_dir, exist_ok=True)
         
-        filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.jpg"
         filepath = os.path.join(capture_dir, filename)
         
         try:
@@ -111,7 +111,7 @@ class MockCameraDriver(CameraDriver):
         capture_dir = get_capture_directory()
         
         os.makedirs(capture_dir, exist_ok=True)
-        filename = f"mock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.jpg"
         filepath = os.path.join(capture_dir, filename)
         
         # Black background (soil)
