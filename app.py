@@ -24,6 +24,8 @@ import time
 import logging
 import threading
 import subprocess
+import datetime
+import sqlite3
 from flask import Flask, jsonify, render_template, request, send_file
 from flask_sqlalchemy import SQLAlchemy
 
@@ -33,7 +35,8 @@ from config import Config
 from app_config import (
     DATABASE_URI, USE_MOCK_HARDWARE, API_HOST, API_PORT, API_DEBUG,
     BACKGROUND_CYCLE_INTERVAL, DEFAULT_MEASUREMENTS_LIMIT,
-    DEFAULT_CAPTURES_LIMIT, DEFAULT_LOGS_LIMIT, LOGGING_LEVEL
+    DEFAULT_CAPTURES_LIMIT, DEFAULT_LOGS_LIMIT, LOGGING_LEVEL,
+    BACKUP_PRIMARY_PATH, BACKUP_FALLBACK_PATH, BACKUP_INTERVAL_HOURS
 )
 
 # Drivers
@@ -114,6 +117,93 @@ class BackgroundTaskManager:
                 time.sleep(BACKGROUND_CYCLE_INTERVAL)
 
 
+class DatabaseBackupManager:
+    """Manages periodic backups of the SQLite database file."""
+
+    def __init__(self, app_instance, db_uri):
+        self.app = app_instance
+        self.db_uri = db_uri
+        self.thread = None
+        self.running = False
+
+    def start(self):
+        """Start database backup thread."""
+        if self.thread is None or not self.thread.is_alive():
+            self.running = True
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+            logger.info("Database backup thread started.")
+
+    def stop(self):
+        """Stop database backup thread."""
+        self.running = False
+        logger.info("Database backup thread stopped.")
+
+    def _resolve_db_path(self):
+        """Resolve the SQLite database file path from the configured URI."""
+        if not self.db_uri.startswith('sqlite:///'):
+            logger.error("Database backup skipped: unsupported DB URI %s", self.db_uri)
+            return None
+
+        db_path = self.db_uri.replace('sqlite:///', '', 1)
+        if os.path.isabs(db_path):
+            return db_path
+
+        instance_candidate = os.path.join(self.app.instance_path, db_path)
+        if os.path.exists(instance_candidate):
+            return instance_candidate
+
+        return os.path.join(self.app.root_path, db_path)
+
+    def _resolve_backup_dir(self):
+        """Pick primary backup path if available, otherwise use fallback."""
+        if os.path.isdir(BACKUP_PRIMARY_PATH):
+            return BACKUP_PRIMARY_PATH
+
+        fallback_path = BACKUP_FALLBACK_PATH
+        if not os.path.isabs(fallback_path):
+            fallback_path = os.path.join(self.app.root_path, fallback_path)
+
+        return fallback_path
+
+    def _backup_once(self):
+        db_path = self._resolve_db_path()
+        if not db_path or not os.path.exists(db_path):
+            logger.error("Database backup skipped: database file not found at %s", db_path)
+            return
+
+        backup_dir = self._resolve_backup_dir()
+        try:
+            os.makedirs(backup_dir, exist_ok=True)
+        except Exception as e:
+            logger.error("Database backup skipped: cannot create backup directory %s: %s", backup_dir, e)
+            return
+
+        date_stamp = datetime.datetime.now().strftime('%Y%m%d')
+        backup_path = os.path.join(backup_dir, f"gombabox_{date_stamp}.db")
+
+        try:
+            with sqlite3.connect(db_path) as source, sqlite3.connect(backup_path) as dest:
+                source.backup(dest)
+            logger.info("Database backup saved to %s", backup_path)
+        except Exception as e:
+            logger.error("Database backup failed: %s", e)
+
+    def _run(self):
+        """Run the daily backup loop."""
+        interval = datetime.timedelta(hours=BACKUP_INTERVAL_HOURS)
+        next_run = datetime.datetime.now()
+
+        while self.running:
+            now = datetime.datetime.now()
+            if now >= next_run:
+                self._backup_once()
+                next_run = now + interval
+
+            sleep_seconds = max(1, min(60, int((next_run - now).total_seconds())))
+            time.sleep(sleep_seconds)
+
+
 # Shared relay driver for manual control via API
 def _create_relay_driver():
     """Create relay driver instance (real or mock based on config)."""
@@ -130,6 +220,7 @@ relay_driver = _create_relay_driver()
 
 # Global instances
 task_manager = BackgroundTaskManager(app, db.session, relay_driver)
+backup_manager = DatabaseBackupManager(app, DATABASE_URI)
 
 
 def _restart_service_async():
@@ -478,6 +569,9 @@ if __name__ == '__main__':
     
     # Start background task manager
     task_manager.start()
+
+    # Start database backup manager
+    backup_manager.start()
     
     # Start Flask server
     logger.info(f"Starting Flask server on {API_HOST}:{API_PORT}")

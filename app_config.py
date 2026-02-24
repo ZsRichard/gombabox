@@ -22,3 +22,8 @@ DEFAULT_LOGS_LIMIT = 50
 
 # Logging Configuration
 LOGGING_LEVEL = 'INFO'
+
+# Database Backup Configuration
+BACKUP_PRIMARY_PATH = '/media/richard/GOMBABOX/Database_backup'
+BACKUP_FALLBACK_PATH = '/static/Database_backup'
+BACKUP_INTERVAL_HOURS = 24
