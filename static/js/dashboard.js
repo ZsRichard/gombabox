@@ -33,7 +33,313 @@ document.addEventListener('DOMContentLoaded', function() {
     loadControls();
     loadSettings();
     loadGrowthPhase();
+    initializeDatabaseTab();
 });
+
+let dbTables = {};
+let dbState = {
+    table: null,
+    limit: 50,
+    offset: 0,
+    total: 0
+};
+let dbEditContext = null;
+let dbEditModal = null;
+
+function initializeDatabaseTab() {
+    const tableSelect = document.getElementById('db-table-select');
+    const limitSelect = document.getElementById('db-table-limit');
+    const refreshBtn = document.getElementById('db-refresh-btn');
+    const prevBtn = document.getElementById('db-prev-btn');
+    const nextBtn = document.getElementById('db-next-btn');
+    const saveBtn = document.getElementById('db-save-btn');
+    const modalElement = document.getElementById('db-edit-modal');
+
+    if (!tableSelect || !limitSelect || !refreshBtn || !prevBtn || !nextBtn || !saveBtn || !modalElement) {
+        return;
+    }
+
+    dbEditModal = new bootstrap.Modal(modalElement);
+
+    tableSelect.addEventListener('change', () => {
+        dbState.table = tableSelect.value;
+        dbState.offset = 0;
+        loadDatabaseRows();
+    });
+
+    limitSelect.addEventListener('change', () => {
+        dbState.limit = Number(limitSelect.value);
+        dbState.offset = 0;
+        loadDatabaseRows();
+    });
+
+    refreshBtn.addEventListener('click', () => loadDatabaseRows());
+
+    prevBtn.addEventListener('click', () => {
+        dbState.offset = Math.max(0, dbState.offset - dbState.limit);
+        loadDatabaseRows();
+    });
+
+    nextBtn.addEventListener('click', () => {
+        const nextOffset = dbState.offset + dbState.limit;
+        if (nextOffset < dbState.total) {
+            dbState.offset = nextOffset;
+            loadDatabaseRows();
+        }
+    });
+
+    saveBtn.addEventListener('click', saveDatabaseRow);
+
+    loadDatabaseTables();
+}
+
+function setDatabaseAlert(message, isError = false) {
+    const alertEl = document.getElementById('db-alert');
+    if (!alertEl) {
+        return;
+    }
+
+    if (!message) {
+        alertEl.style.display = 'none';
+        alertEl.textContent = '';
+        return;
+    }
+
+    alertEl.style.display = 'block';
+    alertEl.classList.toggle('alert-danger-custom', isError);
+    alertEl.classList.toggle('alert-warning-custom', !isError);
+    alertEl.textContent = message;
+}
+
+function loadDatabaseTables() {
+    fetch(`${API_BASE}/db/tables`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                setDatabaseAlert(data.error, true);
+                return;
+            }
+
+            dbTables = data.tables || {};
+            const tableSelect = document.getElementById('db-table-select');
+            if (!tableSelect) {
+                return;
+            }
+
+            tableSelect.innerHTML = '';
+            const tableNames = Object.keys(dbTables);
+            tableNames.forEach(name => {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = name;
+                tableSelect.appendChild(option);
+            });
+
+            if (!dbState.table && tableNames.length > 0) {
+                dbState.table = tableNames[0];
+                tableSelect.value = dbState.table;
+            }
+
+            loadDatabaseRows();
+        })
+        .catch(error => {
+            console.error('Database table fetch error:', error);
+            setDatabaseAlert('Failed to load database tables.', true);
+        });
+}
+
+function loadDatabaseRows() {
+    if (!dbState.table) {
+        return;
+    }
+
+    setDatabaseAlert('Loading data...');
+
+    const params = new URLSearchParams({
+        limit: dbState.limit,
+        offset: dbState.offset
+    });
+
+    fetch(`${API_BASE}/db/${encodeURIComponent(dbState.table)}?${params.toString()}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                setDatabaseAlert(data.error, true);
+                return;
+            }
+
+            dbState.total = Number(data.total) || 0;
+            renderDatabaseTable(data);
+            updateDatabasePager();
+            setDatabaseAlert('');
+        })
+        .catch(error => {
+            console.error('Database rows fetch error:', error);
+            setDatabaseAlert('Failed to load database rows.', true);
+        });
+}
+
+function renderDatabaseTable(data) {
+    const headEl = document.getElementById('db-table-head');
+    const bodyEl = document.getElementById('db-table-body');
+    if (!headEl || !bodyEl) {
+        return;
+    }
+
+    const columns = data.columns || [];
+    const editable = data.editable || [];
+
+    headEl.innerHTML = '';
+    bodyEl.innerHTML = '';
+
+    const headerRow = document.createElement('tr');
+    columns.forEach(column => {
+        const th = document.createElement('th');
+        th.textContent = column;
+        headerRow.appendChild(th);
+    });
+
+    const actionsTh = document.createElement('th');
+    actionsTh.textContent = 'Actions';
+    headerRow.appendChild(actionsTh);
+    headEl.appendChild(headerRow);
+
+    data.rows.forEach(row => {
+        const tr = document.createElement('tr');
+        columns.forEach(column => {
+            const td = document.createElement('td');
+            td.textContent = row[column] !== undefined && row[column] !== null ? row[column] : '';
+            tr.appendChild(td);
+        });
+
+        const actionTd = document.createElement('td');
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-sm btn-primary me-2';
+        editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', () => openEditModal(row, columns, editable, data.id_field));
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-sm btn-danger';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteDatabaseRow(row, data.id_field));
+
+        actionTd.appendChild(editBtn);
+        actionTd.appendChild(deleteBtn);
+        tr.appendChild(actionTd);
+        bodyEl.appendChild(tr);
+    });
+}
+
+function updateDatabasePager() {
+    const pageInfo = document.getElementById('db-page-info');
+    if (!pageInfo) {
+        return;
+    }
+
+    const currentPage = Math.floor(dbState.offset / dbState.limit) + 1;
+    const totalPages = Math.max(1, Math.ceil(dbState.total / dbState.limit));
+    pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+}
+
+function openEditModal(row, columns, editable, idField) {
+    if (!dbEditModal) {
+        return;
+    }
+
+    const formEl = document.getElementById('db-edit-form');
+    if (!formEl) {
+        return;
+    }
+
+    dbEditContext = {
+        id: row[idField],
+        idField,
+        table: dbState.table,
+        editable
+    };
+
+    formEl.innerHTML = '';
+    editable.forEach(field => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mb-3';
+
+        const label = document.createElement('label');
+        label.className = 'form-label';
+        label.textContent = field;
+        label.setAttribute('for', `db-edit-${field}`);
+
+        const input = document.createElement('input');
+        input.className = 'form-control';
+        input.id = `db-edit-${field}`;
+        input.value = row[field] !== undefined && row[field] !== null ? row[field] : '';
+
+        wrapper.appendChild(label);
+        wrapper.appendChild(input);
+        formEl.appendChild(wrapper);
+    });
+
+    dbEditModal.show();
+}
+
+function saveDatabaseRow() {
+    if (!dbEditContext) {
+        return;
+    }
+
+    const payload = {};
+    dbEditContext.editable.forEach(field => {
+        const input = document.getElementById(`db-edit-${field}`);
+        if (input) {
+            payload[field] = input.value;
+        }
+    });
+
+    fetch(`${API_BASE}/db/${encodeURIComponent(dbEditContext.table)}/${encodeURIComponent(dbEditContext.id)}`,
+        {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }
+    )
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                setDatabaseAlert(data.error, true);
+                return;
+            }
+
+            dbEditModal.hide();
+            loadDatabaseRows();
+        })
+        .catch(error => {
+            console.error('Database update error:', error);
+            setDatabaseAlert('Failed to update row.', true);
+        });
+}
+
+function deleteDatabaseRow(row, idField) {
+    const rowId = row[idField];
+    if (!confirm(`Delete row ${rowId}? This cannot be undone.`)) {
+        return;
+    }
+
+    fetch(`${API_BASE}/db/${encodeURIComponent(dbState.table)}/${encodeURIComponent(rowId)}`,
+        { method: 'DELETE' }
+    )
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                setDatabaseAlert(data.error, true);
+                return;
+            }
+
+            loadDatabaseRows();
+        })
+        .catch(error => {
+            console.error('Database delete error:', error);
+            setDatabaseAlert('Failed to delete row.', true);
+        });
+}
 
 /**
  * Initialize all Chart.js instances

@@ -30,7 +30,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 from flask_sqlalchemy import SQLAlchemy
 
 # Database
-from models import db, Measurement, CameraCapture, SystemLog
+from models import db, Measurement, CameraCapture, SystemLog, Setting
 from config import Config
 from app_config import (
     DATABASE_URI, USE_MOCK_HARDWARE, API_HOST, API_PORT, API_DEBUG,
@@ -59,6 +59,37 @@ db.init_app(app)
 # Configure logging
 logging.basicConfig(level=LOGGING_LEVEL)
 logger = logging.getLogger(__name__)
+
+DB_TABLES = {
+    'measurements': {
+        'model': Measurement,
+        'id_field': 'id',
+        'columns': ['id', 'timestamp', 'temperature', 'humidity', 'pressure', 'co2', 'light'],
+        'editable': ['temperature', 'humidity', 'pressure', 'co2', 'light'],
+        'order_by': Measurement.timestamp.desc()
+    },
+    'camera_captures': {
+        'model': CameraCapture,
+        'id_field': 'id',
+        'columns': ['id', 'timestamp', 'filename', 'analysis_result'],
+        'editable': ['filename', 'analysis_result'],
+        'order_by': CameraCapture.timestamp.desc()
+    },
+    'system_logs': {
+        'model': SystemLog,
+        'id_field': 'id',
+        'columns': ['id', 'timestamp', 'level', 'message'],
+        'editable': ['level', 'message'],
+        'order_by': SystemLog.timestamp.desc()
+    },
+    'settings': {
+        'model': Setting,
+        'id_field': 'key',
+        'columns': ['key', 'value', 'description'],
+        'editable': ['value', 'description'],
+        'order_by': Setting.key.asc()
+    }
+}
 
 
 class BackgroundTaskManager:
@@ -398,6 +429,136 @@ def settings_endpoint(key):
         logger.error(f"Error handling settings for {key}: {e}")
         logger.exception(e)
         return jsonify({'error': 'Failed to handle setting'}), 500
+
+
+@app.route('/api/db/tables', methods=['GET'])
+def list_db_tables():
+    """List available database tables for the UI."""
+    try:
+        tables = {}
+        for name, info in DB_TABLES.items():
+            tables[name] = {
+                'columns': info['columns'],
+                'editable': info['editable'],
+                'id_field': info['id_field']
+            }
+        return jsonify({'tables': tables})
+    except Exception as e:
+        logger.error(f"Error listing database tables: {e}")
+        return jsonify({'error': 'Failed to list database tables'}), 500
+
+
+@app.route('/api/db/<table_name>', methods=['GET'])
+def get_db_table_rows(table_name):
+    """Get rows for a database table with pagination."""
+    info = DB_TABLES.get(table_name)
+    if not info:
+        return jsonify({'error': 'Unknown table'}), 404
+
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+
+        query = info['model'].query.order_by(info['order_by'])
+        total = query.count()
+        rows = query.offset(offset).limit(limit).all()
+
+        def serialize_value(value):
+            if isinstance(value, datetime.datetime):
+                return value.isoformat(sep=' ', timespec='seconds')
+            return value
+
+        rows_payload = []
+        for row in rows:
+            row_data = {}
+            for column in info['columns']:
+                row_data[column] = serialize_value(getattr(row, column))
+            rows_payload.append(row_data)
+
+        return jsonify({
+            'table': table_name,
+            'columns': info['columns'],
+            'editable': info['editable'],
+            'id_field': info['id_field'],
+            'rows': rows_payload,
+            'total': total,
+            'limit': limit,
+            'offset': offset
+        })
+    except Exception as e:
+        logger.error(f"Error fetching database rows for {table_name}: {e}")
+        return jsonify({'error': 'Failed to fetch database rows'}), 500
+
+
+@app.route('/api/db/<table_name>/<row_id>', methods=['PATCH'])
+def update_db_row(table_name, row_id):
+    """Update a row in the selected database table."""
+    info = DB_TABLES.get(table_name)
+    if not info:
+        return jsonify({'error': 'Unknown table'}), 404
+
+    if not request.json:
+        return jsonify({'error': 'Missing update payload'}), 400
+
+    try:
+        model = info['model']
+        id_field = info['id_field']
+
+        if id_field == 'id':
+            try:
+                row_id = int(row_id)
+            except ValueError:
+                return jsonify({'error': 'Invalid row id'}), 400
+
+        row = model.query.get(row_id)
+        if not row:
+            return jsonify({'error': 'Row not found'}), 404
+
+        updates = {k: v for k, v in request.json.items() if k in info['editable']}
+        if not updates:
+            return jsonify({'error': 'No editable fields provided'}), 400
+
+        for field, value in updates.items():
+            setattr(row, field, value)
+
+        db.session.commit()
+        return jsonify({'status': 'updated'})
+    except Exception as e:
+        logger.error(f"Error updating database row {table_name}/{row_id}: {e}")
+        db.session.rollback()
+        return jsonify({'error': 'Failed to update row'}), 500
+
+
+@app.route('/api/db/<table_name>/<row_id>', methods=['DELETE'])
+def delete_db_row(table_name, row_id):
+    """Delete a row from the selected database table."""
+    info = DB_TABLES.get(table_name)
+    if not info:
+        return jsonify({'error': 'Unknown table'}), 404
+
+    try:
+        model = info['model']
+        id_field = info['id_field']
+
+        if id_field == 'id':
+            try:
+                row_id = int(row_id)
+            except ValueError:
+                return jsonify({'error': 'Invalid row id'}), 400
+
+        row = model.query.get(row_id)
+        if not row:
+            return jsonify({'error': 'Row not found'}), 404
+
+        db.session.delete(row)
+        db.session.commit()
+        return jsonify({'status': 'deleted'})
+    except Exception as e:
+        logger.error(f"Error deleting database row {table_name}/{row_id}: {e}")
+        db.session.rollback()
+        return jsonify({'error': 'Failed to delete row'}), 500
 
 
 @app.route('/api/phase', methods=['GET', 'POST'])
