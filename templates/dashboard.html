@@ -135,10 +135,46 @@
                                 </div>                            </div>
                         </div>
                     </div>
-                    <div class="col-md-6">
+                </div>
+
+                <!-- Time Range Selector -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-body">
+                                <label for="time-range-select" class="form-label">
+                                    <i class="fas fa-calendar"></i> Chart Time Range
+                                </label>
+                                <div class="btn-group" role="group">
+                                    <input type="radio" class="btn-check" name="time-range" id="time-1h" value="1" checked>
+                                    <label class="btn btn-outline-primary" for="time-1h">1 Hour</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-6h" value="6">
+                                    <label class="btn btn-outline-primary" for="time-6h">6 Hours</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-24h" value="24">
+                                    <label class="btn btn-outline-primary" for="time-24h">24 Hours</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-7d" value="168">
+                                    <label class="btn btn-outline-primary" for="time-7d">7 Days</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-30d" value="720">
+                                    <label class="btn btn-outline-primary" for="time-30d">30 Days</label>
+                                </div>
+                                <div class="mt-2">
+                                    <small class="text-muted" id="chart-data-info">Loading...</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Coverage Trend Chart -->
+                <div class="row mt-4">
+                    <div class="col-12">
                         <div class="card">
                             <div class="card-header">
-                                <i class="fas fa-chart-line"></i> Coverage Trend
+                                <i class="fas fa-chart-line"></i> Mycelium Coverage Trend
                             </div>
                             <div class="card-body">
                                 <div class="chart-container">

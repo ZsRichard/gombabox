@@ -317,6 +317,80 @@ def get_latest_measurement():
         return jsonify({'error': 'Failed to fetch measurement'}), 500
 
 
+@app.route('/api/measurements/history', methods=['GET'])
+def get_measurements_history():
+    """Get measurement history for a given time range.
+    
+    Query parameters:
+    - hours: Number of hours back to retrieve (default: 1, max: 720 = 30 days)
+    """
+    try:
+        hours = request.args.get('hours', '1', type=str)
+        try:
+            hours = int(hours)
+            hours = min(max(hours, 1), 720)  # Clamp between 1 and 720 hours
+        except ValueError:
+            hours = 1
+        
+        # Calculate time cutoff
+        time_cutoff = datetime.datetime.now() - datetime.timedelta(hours=hours)
+        
+        # Fetch measurements from the time range
+        measurements = Measurement.query.filter(
+            Measurement.timestamp >= time_cutoff
+        ).order_by(Measurement.timestamp.asc()).all()
+        
+        return jsonify({
+            'measurements': [m.to_dict() for m in measurements],
+            'hours': hours,
+            'count': len(measurements)
+        })
+    except Exception as e:
+        logger.error(f"Error fetching measurement history: {e}")
+        return jsonify({'error': 'Failed to fetch measurement history'}), 500
+
+
+@app.route('/api/camera/history', methods=['GET'])
+def get_camera_history():
+    """Get camera capture history for a given time range.
+    
+    Query parameters:
+    - hours: Number of hours back to retrieve (default: 1, max: 720 = 30 days)
+    """
+    try:
+        hours = request.args.get('hours', '1', type=str)
+        try:
+            hours = int(hours)
+            hours = min(max(hours, 1), 720)  # Clamp between 1 and 720 hours
+        except ValueError:
+            hours = 1
+        
+        # Calculate time cutoff
+        time_cutoff = datetime.datetime.now() - datetime.timedelta(hours=hours)
+        
+        # Fetch camera captures from the time range
+        captures = CameraCapture.query.filter(
+            CameraCapture.timestamp >= time_cutoff
+        ).order_by(CameraCapture.timestamp.asc()).all()
+        
+        # Extract timestamps and coverage percentages
+        capture_data = []
+        for capture in captures:
+            capture_data.append({
+                'time': capture.timestamp.strftime('%Y-%m-%d %H:%M'),
+                'analysis': capture.analysis_result or "0"
+            })
+        
+        return jsonify({
+            'captures': capture_data,
+            'hours': hours,
+            'count': len(capture_data)
+        })
+    except Exception as e:
+        logger.error(f"Error fetching camera history: {e}")
+        return jsonify({'error': 'Failed to fetch camera history'}), 500
+
+
 @app.route('/api/camera/captures', methods=['GET'])
 def get_camera_captures():
     """Get camera capture history with pagination."""

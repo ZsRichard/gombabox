@@ -3,7 +3,7 @@
 
 const API_BASE = '/api';
 const REFRESH_INTERVAL = 5000; // 5 seconds
-const CHART_MAX_POINTS = 20;
+const CHART_MAX_POINTS = 500; // Increased for handling larger time ranges
 
 // Chart instances
 let tempChart = null;
@@ -11,6 +11,9 @@ let humidityChart = null;
 let co2Chart = null;
 let lightChart = null;
 let coverageChart = null;
+
+// Current time range setting (in hours)
+let currentTimeRange = 1;
 
 // Data storage
 let sensorHistory = {
@@ -27,6 +30,10 @@ let sensorHistory = {
  */
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Initializing GombaBox Dashboard...');
+    
+    // Set up time range selector listeners
+    setupTimeRangeSelector();
+    
     initializeCharts();
     loadInitialData();
     startAutoRefresh();
@@ -342,6 +349,100 @@ function deleteDatabaseRow(row, idField) {
 }
 
 /**
+ * Set up time range selector button listeners
+ */
+function setupTimeRangeSelector() {
+    const timeRangeButtons = document.querySelectorAll('input[name="time-range"]');
+    timeRangeButtons.forEach(button => {
+        button.addEventListener('change', function(e) {
+            currentTimeRange = parseInt(this.value);
+            console.log('Time range changed to:', currentTimeRange, 'hours');
+            loadHistoricalData();
+        });
+    });
+}
+
+/**
+ * Load historical sensor data for the selected time range
+ */
+function loadHistoricalData() {
+    // Fetch both measurements and camera captures
+    Promise.all([
+        fetch(`${API_BASE}/measurements/history?hours=${currentTimeRange}`).then(r => r.json()),
+        fetch(`${API_BASE}/camera/history?hours=${currentTimeRange}`).then(r => r.json())
+    ])
+    .then(([measureData, cameraData]) => {
+        if (measureData.error) {
+            console.error('Error fetching measurements:', measureData.error);
+            updateChartDataInfo(`Error loading data: ${measureData.error}`);
+            return;
+        }
+
+        // Clear existing history
+        sensorHistory = {
+            timestamps: [],
+            temp: [],
+            hum: [],
+            co2: [],
+            light: [],
+            coverage: []
+        };
+
+        // Process measurements from the API
+        if (measureData.measurements && measureData.measurements.length > 0) {
+            measureData.measurements.forEach(m => {
+                sensorHistory.timestamps.push(m.time);
+                sensorHistory.temp.push(parseFloat(m.temp));
+                sensorHistory.hum.push(parseFloat(m.hum));
+                sensorHistory.co2.push(parseInt(m.co2) || 0);
+                sensorHistory.light.push(parseFloat(m.light) || 0);
+            });
+        }
+
+        // Process camera captures for coverage data
+        if (cameraData.captures && cameraData.captures.length > 0) {
+            cameraData.captures.forEach(c => {
+                // Find the corresponding timestamp in the history or add it
+                const timestamp = c.time;
+                let timestampIndex = sensorHistory.timestamps.indexOf(timestamp);
+                
+                // If the timestamp doesn't exist in measurements, add it
+                if (timestampIndex === -1) {
+                    sensorHistory.timestamps.push(timestamp);
+                    sensorHistory.temp.push(null);
+                    sensorHistory.hum.push(null);
+                    sensorHistory.co2.push(null);
+                    sensorHistory.light.push(null);
+                    timestampIndex = sensorHistory.timestamps.length - 1;
+                }
+                
+                // Add or update coverage for this timestamp
+                sensorHistory.coverage[timestampIndex] = parseFloat(c.analysis) || 0;
+            });
+            
+            // Ensure coverage array has the same length as timestamps
+            while (sensorHistory.coverage.length < sensorHistory.timestamps.length) {
+                sensorHistory.coverage.push(null);
+            }
+        }
+
+        console.log(`Loaded ${sensorHistory.timestamps.length} measurements and ${cameraData.captures ? cameraData.captures.length : 0} camera captures for ${measureData.hours} hours`);
+        updateChartDataInfo(`${sensorHistory.timestamps.length} data points loaded (${measureData.hours} hour${measureData.hours !== 1 ? 's' : ''})`);
+        updateCharts();
+    })
+    .catch(error => {
+        console.error('Fetch error:', error);
+        updateChartDataInfo('Failed to load data');
+    });
+}
+function updateChartDataInfo(message) {
+    const infoEl = document.getElementById('chart-data-info');
+    if (infoEl) {
+        infoEl.textContent = message;
+    }
+}
+
+/**
  * Initialize all Chart.js instances
  */
 function initializeCharts() {
@@ -490,7 +591,8 @@ function initializeCharts() {
                     borderColor: '#9b59b6',
                     backgroundColor: 'rgba(155, 89, 182, 0.1)',
                     fill: true,
-                    tension: 0.4
+                    tension: 0.4,
+                    spanGaps: true
                 }]
             },
             options: {
@@ -802,7 +904,8 @@ function loadLogs() {
  * Load all initial data
  */
 function loadInitialData() {
-    loadSensorData();
+    loadSensorData(); // Update current readings in top boxes
+    loadHistoricalData(); // Load historical data for charts based on current time range
     loadCameraData();
     loadLogs();
     checkSystemStatus();
@@ -962,7 +1065,7 @@ function updateTimestamp() {
  */
 function startAutoRefresh() {
     setInterval(() => {
-        loadSensorData();
+        loadSensorData(); // Update current readings and add latest to history
         loadCameraData();
         checkSystemStatus();
         refreshRelayStates();
