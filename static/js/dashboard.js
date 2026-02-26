@@ -349,6 +349,35 @@ function deleteDatabaseRow(row, idField) {
 }
 
 /**
+ * Sort sensorHistory arrays by timestamp chronologically
+ * Maintains correspondence between timestamps and their data values
+ */
+function sortSensorHistoryByTimestamp() {
+    // Create array of indices
+    const indices = Array.from({length: sensorHistory.timestamps.length}, (_, i) => i);
+    
+    // Sort indices based on timestamps
+    indices.sort((a, b) => {
+        const timeA = new Date(sensorHistory.timestamps[a]);
+        const timeB = new Date(sensorHistory.timestamps[b]);
+        return timeA - timeB;
+    });
+    
+    // Reorder all arrays based on sorted indices
+    const sortedData = {
+        timestamps: indices.map(i => sensorHistory.timestamps[i]),
+        temp: indices.map(i => sensorHistory.temp[i]),
+        hum: indices.map(i => sensorHistory.hum[i]),
+        co2: indices.map(i => sensorHistory.co2[i]),
+        light: indices.map(i => sensorHistory.light[i]),
+        coverage: indices.map(i => sensorHistory.coverage[i])
+    };
+    
+    // Replace with sorted data
+    sensorHistory = sortedData;
+}
+
+/**
  * Set up time range selector button listeners
  */
 function setupTimeRangeSelector() {
@@ -425,6 +454,10 @@ function loadHistoricalData() {
                 sensorHistory.coverage.push(null);
             }
         }
+
+        // Sort all data by timestamp to fix chronological order
+        // This is necessary because camera captures may have been appended out of order
+        sortSensorHistoryByTimestamp();
 
         console.log(`Loaded ${sensorHistory.timestamps.length} measurements and ${cameraData.captures ? cameraData.captures.length : 0} camera captures for ${measureData.hours} hours`);
         updateChartDataInfo(`${sensorHistory.timestamps.length} data points loaded (${measureData.hours} hour${measureData.hours !== 1 ? 's' : ''})`);

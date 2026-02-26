@@ -30,8 +30,6 @@ class RealRelayDriver(RelayDriver):
         if not GPIO_AVAILABLE:
             raise RuntimeError("GPIO library not available! Use Mock driver instead.")
         
-        # Hardware connection (could come from Config, but KISS: fixed here)
-        # PIN assignments from previous conversation:
         self.devices = {
             1: OutputDevice(27, active_high=False, initial_value=False), # Fan
             2: OutputDevice(17, active_high=False, initial_value=False), # Humidifier
