@@ -34,7 +34,7 @@ from models import db, Measurement, CameraCapture, SystemLog, Setting
 from config import Config, DEFAULTS
 from app_config import (
     DATABASE_URI, USE_MOCK_HARDWARE, API_HOST, API_PORT, API_DEBUG,
-    BACKGROUND_CYCLE_INTERVAL, DEFAULT_MEASUREMENTS_LIMIT,
+    DEFAULT_MEASUREMENTS_LIMIT,
     DEFAULT_CAPTURES_LIMIT, DEFAULT_LOGS_LIMIT, LOGGING_LEVEL,
     BACKUP_PRIMARY_PATH, BACKUP_FALLBACK_PATH, BACKUP_INTERVAL_HOURS
 )
@@ -59,6 +59,7 @@ db.init_app(app)
 # Configure logging
 logging.basicConfig(level=LOGGING_LEVEL)
 logger = logging.getLogger(__name__)
+ENGINE_TICK_SECONDS = 1
 
 DB_TABLES = {
     'measurements': {
@@ -145,14 +146,7 @@ class BackgroundTaskManager:
                     logger.error(f"Error in background cycle: {e}")
                     logger.exception(e)
 
-                try:
-                    sleep_seconds = int(Config.get('service_cycle_interval_s'))
-                except (TypeError, ValueError):
-                    sleep_seconds = BACKGROUND_CYCLE_INTERVAL
-
-                # Guardrails to avoid too-fast loops or accidental very long pauses.
-                sleep_seconds = max(1, min(sleep_seconds, 3600))
-                time.sleep(sleep_seconds)
+                time.sleep(ENGINE_TICK_SECONDS)
 
 
 class DatabaseBackupManager:
@@ -484,6 +478,7 @@ def get_settings():
     try:
         # Remove deprecated key from DB to keep settings clean after migration.
         Setting.query.filter_by(key='co2_limit').delete()
+        Setting.query.filter_by(key='service_cycle_interval_s').delete()
         db.session.commit()
 
         # Fill short descriptions for known setting rows.

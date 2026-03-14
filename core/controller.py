@@ -39,45 +39,67 @@ class MushroomController:
         self.db = db_session
         
         # Time-based scheduling state
+        now = time.monotonic()
+        self._last_sensor_sample_at = now
+        self._last_control_eval_at = 0.0
         self._last_visual_inspection_at = time.monotonic()
+        self._latest_sensor_data = None
 
         # Fan impulse control state
+        self._fan_pulse_end_at = 0.0
         self._fan_next_allowed_pulse_at = 0.0
-        self._last_fan_impulse_at = time.monotonic()
+        self._last_fan_impulse_at = now
 
         # Humidifier impulse control state
+        self._humidifier_pulse_end_at = 0.0
         self._humidifier_next_allowed_pulse_at = 0.0
         
         logger.info("MushroomController initialized.")
 
     def run_cycle(self):
         """
-        Main cycle: sensor measurements and time-based visual inspection.
+        Main cycle with independent time bases for sensing, control, and camera.
         """
-        # Sensor cycle
-        self.run_sensor_cycle()
-
-        # Visual inspection uses real elapsed time in minutes, independent of loop speed.
-        camera_interval_minutes = int(Config.get('camera_interval'))
-        camera_interval_seconds = max(1, camera_interval_minutes) * 60
         now = time.monotonic()
+
+        sensor_interval_s = max(1, int(Config.get('sensor_sample_interval_s')))
+        control_interval_s = max(1, int(Config.get('control_eval_interval_s')))
+        camera_interval_minutes = max(1, int(Config.get('camera_interval')))
+        camera_interval_seconds = camera_interval_minutes * 60
+
+        if self._latest_sensor_data is None or (now - self._last_sensor_sample_at) >= sensor_interval_s:
+            self.run_sensor_cycle()
+            self._last_sensor_sample_at = time.monotonic()
+
+        if self._latest_sensor_data is not None and (now - self._last_control_eval_at) >= control_interval_s:
+            self.run_control_cycle(self._latest_sensor_data)
+            self._last_control_eval_at = time.monotonic()
+
         if (now - self._last_visual_inspection_at) >= camera_interval_seconds:
             self.run_visual_inspection()
             self._last_visual_inspection_at = time.monotonic()
 
     def run_sensor_cycle(self):
         """
-        Environment control cycle (e.g., runs every minute).
-        Measure -> Save -> Decide -> Actuate (relays)
+        Sensor cycle.
+        Measure -> Save
         """
         try:
-            # 1. Data collection
             sensor_data = self.sensors.read_all()
-            
-            # 2. Save (Measurement)
+            self._latest_sensor_data = sensor_data
             self._save_measurement(sensor_data)
+            self.db.commit()
 
-            # 3. Evaluate and Actuate (Logic delegated to separate methods)
+        except Exception as e:
+            logger.error(f"Error in sensor cycle: {e}")
+            self.db.rollback()
+
+    def run_control_cycle(self, sensor_data):
+        """
+        Control cycle.
+        Decide -> Actuate based on latest measurement and controller state.
+        """
+        try:
             phase = self._get_growth_phase()
             if phase == 'colonization':
                 self._ensure_colonization_mode()
@@ -85,13 +107,12 @@ class MushroomController:
                 self._control_humidity(sensor_data.get('hum', 0))
                 self._control_light(sensor_data.get('light', 0))
                 self._control_air_quality(sensor_data.get('co2', 0))
-            
-            # 4. Commit transaction
+
             self.db.commit()
-            
+
         except Exception as e:
-            logger.error(f"Error in sensor cycle: {e}")
-            self.db.rollback()  # If error, rollback database changes
+            logger.error(f"Error in control cycle: {e}")
+            self.db.rollback()
 
     def run_visual_inspection(self):
         """
@@ -134,6 +155,20 @@ class MushroomController:
         cooldown_s = int(Config.get('humidity_pulse_cooldown_s'))
 
         now = time.monotonic()
+
+        # End active pulse without blocking the main loop.
+        if self._humidifier_pulse_end_at > 0 and now >= self._humidifier_pulse_end_at:
+            self.relays.set_state(RELAY_ID_HUMIDIFIER, False)
+            self._log_system_event(
+                "INFO",
+                f"Humidifier impulse OFF. Cooldown active for {cooldown_s}s"
+            )
+            self._humidifier_pulse_end_at = 0.0
+            self._humidifier_next_allowed_pulse_at = now + cooldown_s
+
+        if self._humidifier_pulse_end_at > 0:
+            return
+
         if now < self._humidifier_next_allowed_pulse_at:
             return
 
@@ -145,17 +180,7 @@ class MushroomController:
             "INFO",
             f"Humidifier impulse ON for {pulse_duration_s}s (Measured: {current_humidity}%, target: {target_humidity}%)"
         )
-
-        # Keep humidifier ON for fixed pulse duration regardless of immediate sensor fluctuation.
-        time.sleep(pulse_duration_s)
-
-        self.relays.set_state(RELAY_ID_HUMIDIFIER, False)
-        self._log_system_event(
-            "INFO",
-            f"Humidifier impulse OFF. Cooldown active for {cooldown_s}s"
-        )
-
-        self._humidifier_next_allowed_pulse_at = time.monotonic() + cooldown_s
+        self._humidifier_pulse_end_at = now + max(0, pulse_duration_s)
 
     def _control_light(self, current_lux):
         """Control lighting based on timer."""
@@ -187,6 +212,20 @@ class MushroomController:
 
         now = time.monotonic()
 
+        # End active pulse without blocking the main loop.
+        if self._fan_pulse_end_at > 0 and now >= self._fan_pulse_end_at:
+            self.relays.set_state(RELAY_ID_FAN, False)
+            self._log_system_event(
+                "INFO",
+                f"Ventilation impulse OFF. Cooldown active for {cooldown_s}s"
+            )
+            self._fan_pulse_end_at = 0.0
+            self._last_fan_impulse_at = now
+            self._fan_next_allowed_pulse_at = now + cooldown_s
+
+        if self._fan_pulse_end_at > 0:
+            return
+
         # During cooldown we suppress new ventilation impulses.
         if now < self._fan_next_allowed_pulse_at:
             return
@@ -211,19 +250,7 @@ class MushroomController:
             "INFO",
             f"Ventilation impulse ON for {pulse_duration_s}s - {pulse_reason}"
         )
-
-        # Keep fan on for a fixed pulse duration, regardless of subsequent sensor values.
-        time.sleep(pulse_duration_s)
-
-        self.relays.set_state(RELAY_ID_FAN, False)
-        self._log_system_event(
-            "INFO",
-            f"Ventilation impulse OFF. Cooldown active for {cooldown_s}s"
-        )
-
-        end_time = time.monotonic()
-        self._last_fan_impulse_at = end_time
-        self._fan_next_allowed_pulse_at = end_time + cooldown_s
+        self._fan_pulse_end_at = now + max(0, pulse_duration_s)
 
     def _get_growth_phase(self):
         phase = Config.get('growth_phase')
@@ -233,6 +260,11 @@ class MushroomController:
 
     def _ensure_colonization_mode(self):
         """Disable climate control and daily light during colonization."""
+        self._fan_pulse_end_at = 0.0
+        self._fan_next_allowed_pulse_at = 0.0
+        self._humidifier_pulse_end_at = 0.0
+        self._humidifier_next_allowed_pulse_at = 0.0
+
         if self.relays.get_state(RELAY_ID_FAN):
             self.relays.set_state(RELAY_ID_FAN, False)
             self._log_system_event("INFO", "Ventilation OFF (Colonization phase)")

@@ -20,7 +20,8 @@ DEFAULTS = {
     'fan_cycle_off': 55,        # Fan cycle: duration off (minutes)
     'camera_interval': 60,      # Camera capture interval (minutes)
     'camera_light_lead_seconds': 0,  # LED lead time before capture (seconds), focus wait handled separately
-    'service_cycle_interval_s': 60,  # Background control loop interval (seconds)
+    'sensor_sample_interval_s': 60,  # Sensor measure + DB save interval (seconds)
+    'control_eval_interval_s': 1,    # Control decision interval (seconds)
     'growth_phase': 'fruiting'  # colonization | fruiting
 }
 
@@ -41,7 +42,8 @@ SETTING_DESCRIPTIONS = {
     'fan_cycle_off': 'Legacy fan cycle OFF minutes.',
     'camera_interval': 'Camera capture interval in minutes.',
     'camera_light_lead_seconds': 'LED lead time before capture in seconds.',
-    'service_cycle_interval_s': 'Service control loop interval in seconds.',
+    'sensor_sample_interval_s': 'Sensor measure and save interval in seconds.',
+    'control_eval_interval_s': 'Control decision interval in seconds.',
     'growth_phase': 'Grow phase: colonization or fruiting.'
 }
 
