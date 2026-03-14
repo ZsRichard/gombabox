@@ -25,6 +25,22 @@ let sensorHistory = {
     coverage: []
 };
 
+const SETTINGS_SCHEMA = [
+    { key: 'target_temp', step: '0.1' },
+    { key: 'temp_hysteresis', step: '0.1' },
+    { key: 'target_humidity', step: '0.1' },
+    { key: 'humidity_hysteresis', step: '0.1' },
+    { key: 'co2_pulse_threshold_ppm', step: '1' },
+    { key: 'co2_pulse_duration_s', step: '1' },
+    { key: 'co2_pulse_cooldown_s', step: '1' },
+    { key: 'light_on_hour', step: '1' },
+    { key: 'light_off_hour', step: '1' },
+    { key: 'fan_cycle_on', step: '1' },
+    { key: 'fan_cycle_off', step: '1' },
+    { key: 'camera_interval', step: '1' },
+    { key: 'camera_light_lead_seconds', step: '0.1' }
+];
+
 /**
  * Initialize application on page load
  */
@@ -813,10 +829,12 @@ function loadSettings() {
             if (data.error) return;
 
             let settingsHtml = '';
-            Object.entries(data).forEach(([key, value]) => {
-                if (key === 'growth_phase') {
+            SETTINGS_SCHEMA.forEach(({ key, step }) => {
+                if (!(key in data)) {
                     return;
                 }
+
+                const value = data[key];
                 settingsHtml += `
                     <div class="mb-3">
                         <label for="setting-${key}" class="form-label">
@@ -825,7 +843,7 @@ function loadSettings() {
                         <input type="number" class="form-control" 
                                id="setting-${key}"
                                value="${value}"
-                               step="0.1">
+                               step="${step}">
                         <button class="btn btn-sm btn-primary mt-2"
                                 onclick="saveSetting('${key}')">
                             Save

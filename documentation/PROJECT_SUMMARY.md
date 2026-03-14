@@ -113,8 +113,8 @@ def _control_air_quality(self, current_co2):
 ✅ Explain "why", not "what"
 ```python
 # ✓ Good - explains design decision
-# Hysteresis ±200 ppm prevents relay chattering at threshold
-elif current_co2 < (co2_limit - CO2_OFFSET_OFF):
+# Event-based impulse + cooldown lets air mix before next CO2 decision
+if now < self._fan_next_allowed_pulse_at:
 
 # ✗ Bad (NOT USED) - just restates code
 # if humidity is too low

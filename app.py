@@ -31,7 +31,7 @@ from flask_sqlalchemy import SQLAlchemy
 
 # Database
 from models import db, Measurement, CameraCapture, SystemLog, Setting
-from config import Config
+from config import Config, DEFAULTS
 from app_config import (
     DATABASE_URI, USE_MOCK_HARDWARE, API_HOST, API_PORT, API_DEBUG,
     BACKGROUND_CYCLE_INTERVAL, DEFAULT_MEASUREMENTS_LIMIT,
@@ -475,9 +475,12 @@ def get_system_logs():
 def get_settings():
     """Get all configuration settings."""
     try:
-        from models import Setting
-        settings = Setting.query.all()
-        return jsonify({s.key: s.value for s in settings})
+        # Remove deprecated key from DB to keep settings clean after migration.
+        Setting.query.filter_by(key='co2_limit').delete()
+        db.session.commit()
+
+        settings = {key: Config.get(key) for key in DEFAULTS.keys()}
+        return jsonify(settings)
     except Exception as e:
         logger.error(f"Error fetching settings: {e}")
         return jsonify({'error': 'Failed to fetch settings'}), 500
@@ -487,6 +490,9 @@ def get_settings():
 def settings_endpoint(key):
     """Get or update a specific configuration setting."""
     try:
+        if key not in DEFAULTS:
+            return jsonify({'error': 'Unknown setting key'}), 404
+
         if request.method == 'GET':
             value = Config.get(key)
             return jsonify({'key': key, 'value': value})

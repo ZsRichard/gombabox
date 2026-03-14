@@ -174,7 +174,9 @@ Available settings:
 - `temp_hysteresis`: 1.0°C (float)
 - `target_humidity`: 90.0% (float)
 - `humidity_hysteresis`: 5.0% (float)
-- `co2_limit`: 1200 ppm (int)
+- `co2_pulse_threshold_ppm`: 800 ppm (int)
+- `co2_pulse_duration_s`: 5 s (int)
+- `co2_pulse_cooldown_s`: 90 s (int)
 - `light_on_hour`: 8 (0-23 int)
 - `light_off_hour`: 20 (0-23 int)
 

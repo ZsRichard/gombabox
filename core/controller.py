@@ -11,9 +11,6 @@ RELAY_ID_FAN = 1        # Fan
 RELAY_ID_HUMIDIFIER = 2 # Humidifier
 RELAY_ID_LIGHT = 3      # LED Light
 
-# Constant for CO2 hysteresis (when to turn off ventilation)
-CO2_OFFSET_OFF = 200    # ppm
-
 # Camera focus time (milliseconds to wait for auto-focus before capture)
 # Must match rpicam-still -t timeout value
 # Increased to 5000ms for more reliable focus before capture
@@ -44,6 +41,9 @@ class MushroomController:
         # Counters for cycle scheduling
         self.sensor_cycle_counter = 0  # Sensor: every minute
         self.visual_cycle_counter = 0  # Visual: every hour
+
+        # Fan impulse control state
+        self._fan_next_allowed_pulse_at = 0.0
         
         logger.info("MushroomController initialized.")
 
@@ -164,22 +164,36 @@ class MushroomController:
             self._log_system_event("INFO", f"Light OFF (Time: {current_hour}:00)")
 
     def _control_air_quality(self, current_co2):
-        """Control ventilation based on CO2 level."""
-        co2_limit = Config.get('co2_limit')
-        
-        is_on = self.relays.get_state(RELAY_ID_FAN)
+        """Control ventilation with event-based CO2 impulses and cooldown."""
+        threshold_ppm = int(Config.get('co2_pulse_threshold_ppm'))
+        pulse_duration_s = int(Config.get('co2_pulse_duration_s'))
+        cooldown_s = int(Config.get('co2_pulse_cooldown_s'))
 
-        # Turn on if air quality is poor
-        if current_co2 > co2_limit:
-            if not is_on:
-                self.relays.set_state(RELAY_ID_FAN, True)
-                self._log_system_event("WARNING", f"Ventilation ON (CO2: {current_co2} ppm)")
-        
-        # Turn off if air quality improved (hysteresis: limit - 200)
-        elif current_co2 < (co2_limit - CO2_OFFSET_OFF):
-            if is_on:
-                self.relays.set_state(RELAY_ID_FAN, False)
-                self._log_system_event("INFO", f"Ventilation OFF (CO2: {current_co2} ppm)")
+        now = time.monotonic()
+
+        # During cooldown we suppress new ventilation impulses.
+        if now < self._fan_next_allowed_pulse_at:
+            return
+
+        if current_co2 <= threshold_ppm:
+            return
+
+        self.relays.set_state(RELAY_ID_FAN, True)
+        self._log_system_event(
+            "WARNING",
+            f"Ventilation impulse ON for {pulse_duration_s}s (CO2: {current_co2} ppm)"
+        )
+
+        # Keep fan on for a fixed pulse duration, regardless of subsequent sensor values.
+        time.sleep(pulse_duration_s)
+
+        self.relays.set_state(RELAY_ID_FAN, False)
+        self._log_system_event(
+            "INFO",
+            f"Ventilation impulse OFF. Cooldown active for {cooldown_s}s"
+        )
+
+        self._fan_next_allowed_pulse_at = time.monotonic() + cooldown_s
 
     def _get_growth_phase(self):
         phase = Config.get('growth_phase')
