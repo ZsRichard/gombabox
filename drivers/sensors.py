@@ -95,7 +95,7 @@ class MockSensorDriver(SensorDriver):
         self.data['hum'] += random.uniform(-2.0, 2.0)
         self.data['co2'] += random.randint(-50, 50)
         
-        # Keep limits (don't go to -200 degrees)
+        # Keep limits
         self.data['temp'] = max(15, min(35, self.data['temp']))
         self.data['hum'] = max(30, min(100, self.data['hum']))
         
