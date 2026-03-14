@@ -150,7 +150,8 @@ class MushroomController:
 
     def _control_humidity(self, current_humidity):
         """Control humidifier with event-based pulses and cooldown."""
-        target_humidity = Config.get('target_humidity')
+        target_humidity = float(Config.get('target_humidity'))
+        hysteresis = float(Config.get('humidity_hysteresis'))
         pulse_duration_s = int(Config.get('humidity_pulse_duration_s'))
         cooldown_s = int(Config.get('humidity_pulse_cooldown_s'))
 
@@ -172,7 +173,7 @@ class MushroomController:
         if now < self._humidifier_next_allowed_pulse_at:
             return
 
-        if current_humidity >= target_humidity:
+        if current_humidity >= (target_humidity - hysteresis):
             return
 
         self.relays.set_state(RELAY_ID_HUMIDIFIER, True)
@@ -208,7 +209,7 @@ class MushroomController:
         threshold_ppm = int(Config.get('co2_pulse_threshold_ppm'))
         pulse_duration_s = int(Config.get('co2_pulse_duration_s'))
         cooldown_s = int(Config.get('co2_pulse_cooldown_s'))
-        auto_interval_s = int(Config.get('co2_auto_vent_interval_s'))
+        auto_interval_s = int(Config.get('co2_auto_vent_interval_min')) * 60
 
         now = time.monotonic()
 

@@ -479,6 +479,9 @@ def get_settings():
         # Remove deprecated key from DB to keep settings clean after migration.
         Setting.query.filter_by(key='co2_limit').delete()
         Setting.query.filter_by(key='service_cycle_interval_s').delete()
+        Setting.query.filter_by(key='co2_auto_vent_interval_s').delete()
+        Setting.query.filter_by(key='fan_cycle_on').delete()
+        Setting.query.filter_by(key='fan_cycle_off').delete()
         db.session.commit()
 
         # Fill short descriptions for known setting rows.

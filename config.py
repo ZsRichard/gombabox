@@ -13,11 +13,9 @@ DEFAULTS = {
     'co2_pulse_threshold_ppm': 800,  # CO2 threshold for impulse ventilation (ppm)
     'co2_pulse_duration_s': 5,        # Impulse ventilation ON time (seconds)
     'co2_pulse_cooldown_s': 90,       # Delay after impulse before allowing next one (seconds)
-    'co2_auto_vent_interval_s': 1800, # Automatic ventilation interval when no impulse occurred (seconds)
+    'co2_auto_vent_interval_min': 30, # Automatic ventilation interval when no impulse occurred (minutes)
     'light_on_hour': 8,         # Light on time (hour)
     'light_off_hour': 20,       # Light off time (hour)
-    'fan_cycle_on': 5,          # Fan cycle: duration on (minutes)
-    'fan_cycle_off': 55,        # Fan cycle: duration off (minutes)
     'camera_interval': 60,      # Camera capture interval (minutes)
     'camera_light_lead_seconds': 0,  # LED lead time before capture (seconds), focus wait handled separately
     'sensor_sample_interval_s': 60,  # Sensor measure + DB save interval (seconds)
@@ -35,11 +33,9 @@ SETTING_DESCRIPTIONS = {
     'co2_pulse_threshold_ppm': 'CO2 threshold for ventilation pulse.',
     'co2_pulse_duration_s': 'Ventilation ON pulse in seconds.',
     'co2_pulse_cooldown_s': 'Pause after ventilation pulse in seconds.',
-    'co2_auto_vent_interval_s': 'Auto ventilation interval in seconds.',
+    'co2_auto_vent_interval_min': 'Auto ventilation interval in minutes.',  
     'light_on_hour': 'Daily light start hour (0-23).',
     'light_off_hour': 'Daily light stop hour (0-23).',
-    'fan_cycle_on': 'Legacy fan cycle ON minutes.',
-    'fan_cycle_off': 'Legacy fan cycle OFF minutes.',
     'camera_interval': 'Camera capture interval in minutes.',
     'camera_light_lead_seconds': 'LED lead time before capture in seconds.',
     'sensor_sample_interval_s': 'Sensor measure and save interval in seconds.',
