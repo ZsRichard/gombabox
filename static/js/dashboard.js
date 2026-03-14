@@ -41,7 +41,8 @@ const SETTINGS_SCHEMA = [
     { key: 'fan_cycle_on', step: '1' },
     { key: 'fan_cycle_off', step: '1' },
     { key: 'camera_interval', step: '1' },
-    { key: 'camera_light_lead_seconds', step: '0.1' }
+    { key: 'camera_light_lead_seconds', step: '0.1' },
+    { key: 'service_cycle_interval_s', step: '1' }
 ];
 
 /**

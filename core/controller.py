@@ -38,9 +38,8 @@ class MushroomController:
         self.camera = camera_driver
         self.db = db_session
         
-        # Counters for cycle scheduling
-        self.sensor_cycle_counter = 0  # Sensor: every minute
-        self.visual_cycle_counter = 0  # Visual: every hour
+        # Time-based scheduling state
+        self._last_visual_inspection_at = time.monotonic()
 
         # Fan impulse control state
         self._fan_next_allowed_pulse_at = 0.0
@@ -53,17 +52,18 @@ class MushroomController:
 
     def run_cycle(self):
         """
-        Main cycle: sensor measurements every minute, visual inspection configurable.
+        Main cycle: sensor measurements and time-based visual inspection.
         """
-        # Sensor cycle: every minute
+        # Sensor cycle
         self.run_sensor_cycle()
-        
-        # Visual inspection: configurable interval (default 60 minutes)
-        camera_interval = int(Config.get('camera_interval'))
-        self.visual_cycle_counter += 1
-        if self.visual_cycle_counter >= camera_interval:
+
+        # Visual inspection uses real elapsed time in minutes, independent of loop speed.
+        camera_interval_minutes = int(Config.get('camera_interval'))
+        camera_interval_seconds = max(1, camera_interval_minutes) * 60
+        now = time.monotonic()
+        if (now - self._last_visual_inspection_at) >= camera_interval_seconds:
             self.run_visual_inspection()
-            self.visual_cycle_counter = 0
+            self._last_visual_inspection_at = time.monotonic()
 
     def run_sensor_cycle(self):
         """
@@ -208,7 +208,7 @@ class MushroomController:
 
         self.relays.set_state(RELAY_ID_FAN, True)
         self._log_system_event(
-            "WARNING",
+            "INFO",
             f"Ventilation impulse ON for {pulse_duration_s}s - {pulse_reason}"
         )
 

@@ -144,8 +144,15 @@ class BackgroundTaskManager:
                 except Exception as e:
                     logger.error(f"Error in background cycle: {e}")
                     logger.exception(e)
-                
-                time.sleep(BACKGROUND_CYCLE_INTERVAL)
+
+                try:
+                    sleep_seconds = int(Config.get('service_cycle_interval_s'))
+                except (TypeError, ValueError):
+                    sleep_seconds = BACKGROUND_CYCLE_INTERVAL
+
+                # Guardrails to avoid too-fast loops or accidental very long pauses.
+                sleep_seconds = max(1, min(sleep_seconds, 3600))
+                time.sleep(sleep_seconds)
 
 
 class DatabaseBackupManager:
