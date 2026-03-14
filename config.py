@@ -23,7 +23,45 @@ DEFAULTS = {
     'growth_phase': 'fruiting'  # colonization | fruiting
 }
 
+SETTING_DESCRIPTIONS = {
+    'target_temp': 'Target temperature in C.',
+    'temp_hysteresis': 'Temperature tolerance band.',
+    'target_humidity': 'Target relative humidity percent.',
+    'humidity_hysteresis': 'Humidity tolerance band.',
+    'humidity_pulse_duration_s': 'Humidifier ON pulse in seconds.',
+    'humidity_pulse_cooldown_s': 'Pause after humidifier pulse in seconds.',
+    'co2_pulse_threshold_ppm': 'CO2 threshold for ventilation pulse.',
+    'co2_pulse_duration_s': 'Ventilation ON pulse in seconds.',
+    'co2_pulse_cooldown_s': 'Pause after ventilation pulse in seconds.',
+    'co2_auto_vent_interval_s': 'Auto ventilation interval in seconds.',
+    'light_on_hour': 'Daily light start hour (0-23).',
+    'light_off_hour': 'Daily light stop hour (0-23).',
+    'fan_cycle_on': 'Legacy fan cycle ON minutes.',
+    'fan_cycle_off': 'Legacy fan cycle OFF minutes.',
+    'camera_interval': 'Camera capture interval in minutes.',
+    'camera_light_lead_seconds': 'LED lead time before capture in seconds.',
+    'growth_phase': 'Grow phase: colonization or fruiting.'
+}
+
 class Config:
+    @staticmethod
+    def get_description(key):
+        """Return short human-readable description for a setting key."""
+        return SETTING_DESCRIPTIONS.get(key)
+
+    @staticmethod
+    def ensure_descriptions():
+        """Backfill missing descriptions for known settings."""
+        changed = False
+        for key, description in SETTING_DESCRIPTIONS.items():
+            setting = Setting.query.get(key)
+            if setting and not setting.description and description:
+                setting.description = description
+                changed = True
+
+        if changed:
+            db.session.commit()
+
     @staticmethod
     def get(key):
         """
@@ -41,7 +79,11 @@ class Config:
         if key in DEFAULTS:
             default_val = DEFAULTS[key]
             # Also save it so it's available next time (Self-healing)
-            new_setting = Setting(key=key, value=str(default_val))
+            new_setting = Setting(
+                key=key,
+                value=str(default_val),
+                description=Config.get_description(key)
+            )
             db.session.add(new_setting)
             db.session.commit()
             return default_val
@@ -56,7 +98,11 @@ class Config:
         if setting:
             setting.value = str(value)
         else:
-            setting = Setting(key=key, value=str(value))
+            setting = Setting(
+                key=key,
+                value=str(value),
+                description=Config.get_description(key)
+            )
             db.session.add(setting)
         
         db.session.commit()

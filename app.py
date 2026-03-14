@@ -479,11 +479,26 @@ def get_settings():
         Setting.query.filter_by(key='co2_limit').delete()
         db.session.commit()
 
+        # Fill short descriptions for known setting rows.
+        Config.ensure_descriptions()
+
         settings = {key: Config.get(key) for key in DEFAULTS.keys()}
         return jsonify(settings)
     except Exception as e:
         logger.error(f"Error fetching settings: {e}")
         return jsonify({'error': 'Failed to fetch settings'}), 500
+
+
+@app.route('/api/settings/descriptions', methods=['GET'])
+def get_settings_descriptions():
+    """Get short descriptions for known configuration settings."""
+    try:
+        Config.ensure_descriptions()
+        descriptions = {key: (Config.get_description(key) or "") for key in DEFAULTS.keys()}
+        return jsonify(descriptions)
+    except Exception as e:
+        logger.error(f"Error fetching setting descriptions: {e}")
+        return jsonify({'error': 'Failed to fetch setting descriptions'}), 500
 
 
 @app.route('/api/settings/<key>', methods=['GET', 'POST'])

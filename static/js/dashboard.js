@@ -826,22 +826,30 @@ function toggleRelay(relayId, state) {
  * Load system settings
  */
 function loadSettings() {
-    fetch(`${API_BASE}/settings`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) return;
+    Promise.all([
+        fetch(`${API_BASE}/settings`).then(response => response.json()),
+        fetch(`${API_BASE}/settings/descriptions`).then(response => response.json())
+    ])
+        .then(([settingsData, descriptionsData]) => {
+            if (settingsData.error) return;
+            const descriptions = descriptionsData && !descriptionsData.error ? descriptionsData : {};
 
             let settingsHtml = '';
             SETTINGS_SCHEMA.forEach(({ key, step }) => {
-                if (!(key in data)) {
+                if (!(key in settingsData)) {
                     return;
                 }
 
-                const value = data[key];
+                const value = settingsData[key];
+                const description = descriptions[key] || '';
+                const labelText = formatSettingLabel(key);
+                const infoIconHtml = description
+                    ? `<i class="fas fa-circle-info ms-1 text-muted" title="${escapeHtml(description)}"></i>`
+                    : '';
                 settingsHtml += `
                     <div class="mb-3">
                         <label for="setting-${key}" class="form-label">
-                            ${formatSettingLabel(key)}
+                            ${labelText}${infoIconHtml}
                         </label>
                         <input type="number" class="form-control" 
                                id="setting-${key}"
@@ -859,6 +867,15 @@ function loadSettings() {
         })
         .catch(error => console.error('Settings error:', error));
 }
+
+    function escapeHtml(value) {
+        return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
 /**
  * Load growth phase
