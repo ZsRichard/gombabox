@@ -44,6 +44,10 @@ class MushroomController:
 
         # Fan impulse control state
         self._fan_next_allowed_pulse_at = 0.0
+        self._last_fan_impulse_at = time.monotonic()
+
+        # Humidifier impulse control state
+        self._humidifier_next_allowed_pulse_at = 0.0
         
         logger.info("MushroomController initialized.")
 
@@ -124,23 +128,34 @@ class MushroomController:
     # --- Private Helper Methods (Small, single-purpose functions - Clean Code) ---
 
     def _control_humidity(self, current_humidity):
-        """Control humidifier with hysteresis."""
+        """Control humidifier with event-based pulses and cooldown."""
         target_humidity = Config.get('target_humidity')
-        hysteresis = Config.get('humidity_hysteresis')
-        
-        is_on = self.relays.get_state(RELAY_ID_HUMIDIFIER)
-        
-        # Turn on if too dry
-        if current_humidity < (target_humidity - hysteresis):
-            if not is_on:
-                self.relays.set_state(RELAY_ID_HUMIDIFIER, True)
-                self._log_system_event("INFO", f"Humidifier ON (Measured: {current_humidity}%)")
-        
-        # Turn off when target is reached
-        elif current_humidity > target_humidity:
-            if is_on:
-                self.relays.set_state(RELAY_ID_HUMIDIFIER, False)
-                self._log_system_event("INFO", f"Humidifier OFF (Measured: {current_humidity}%)")
+        pulse_duration_s = int(Config.get('humidity_pulse_duration_s'))
+        cooldown_s = int(Config.get('humidity_pulse_cooldown_s'))
+
+        now = time.monotonic()
+        if now < self._humidifier_next_allowed_pulse_at:
+            return
+
+        if current_humidity >= target_humidity:
+            return
+
+        self.relays.set_state(RELAY_ID_HUMIDIFIER, True)
+        self._log_system_event(
+            "INFO",
+            f"Humidifier impulse ON for {pulse_duration_s}s (Measured: {current_humidity}%, target: {target_humidity}%)"
+        )
+
+        # Keep humidifier ON for fixed pulse duration regardless of immediate sensor fluctuation.
+        time.sleep(pulse_duration_s)
+
+        self.relays.set_state(RELAY_ID_HUMIDIFIER, False)
+        self._log_system_event(
+            "INFO",
+            f"Humidifier impulse OFF. Cooldown active for {cooldown_s}s"
+        )
+
+        self._humidifier_next_allowed_pulse_at = time.monotonic() + cooldown_s
 
     def _control_light(self, current_lux):
         """Control lighting based on timer."""
@@ -168,6 +183,7 @@ class MushroomController:
         threshold_ppm = int(Config.get('co2_pulse_threshold_ppm'))
         pulse_duration_s = int(Config.get('co2_pulse_duration_s'))
         cooldown_s = int(Config.get('co2_pulse_cooldown_s'))
+        auto_interval_s = int(Config.get('co2_auto_vent_interval_s'))
 
         now = time.monotonic()
 
@@ -175,13 +191,25 @@ class MushroomController:
         if now < self._fan_next_allowed_pulse_at:
             return
 
-        if current_co2 <= threshold_ppm:
+        should_pulse = False
+        pulse_reason = ""
+
+        if current_co2 > threshold_ppm:
+            should_pulse = True
+            pulse_reason = f"CO2 trigger (CO2: {current_co2} ppm > {threshold_ppm} ppm)"
+        elif auto_interval_s > 0 and (now - self._last_fan_impulse_at) >= auto_interval_s:
+            should_pulse = True
+            pulse_reason = (
+                f"Automatic interval trigger ({auto_interval_s}s elapsed without ventilation)"
+            )
+
+        if not should_pulse:
             return
 
         self.relays.set_state(RELAY_ID_FAN, True)
         self._log_system_event(
             "WARNING",
-            f"Ventilation impulse ON for {pulse_duration_s}s (CO2: {current_co2} ppm)"
+            f"Ventilation impulse ON for {pulse_duration_s}s - {pulse_reason}"
         )
 
         # Keep fan on for a fixed pulse duration, regardless of subsequent sensor values.
@@ -193,7 +221,9 @@ class MushroomController:
             f"Ventilation impulse OFF. Cooldown active for {cooldown_s}s"
         )
 
-        self._fan_next_allowed_pulse_at = time.monotonic() + cooldown_s
+        end_time = time.monotonic()
+        self._last_fan_impulse_at = end_time
+        self._fan_next_allowed_pulse_at = end_time + cooldown_s
 
     def _get_growth_phase(self):
         phase = Config.get('growth_phase')
