@@ -3,6 +3,8 @@
 
 const API_BASE = '/api';
 const REFRESH_INTERVAL = 5000; // 5 seconds
+const BACKGROUND_REFRESH_INTERVAL = 20000; // lower battery use when hidden
+const OFFLINE_REFRESH_INTERVAL = 30000; // avoid aggressive retries when offline
 const CHART_MAX_POINTS = 500; // Increased for handling larger time ranges
 
 // Chart instances
@@ -11,6 +13,9 @@ let humidityChart = null;
 let co2Chart = null;
 let lightChart = null;
 let coverageChart = null;
+let dataRefreshTimer = null;
+let logsRefreshTimer = null;
+let deferredInstallPrompt = null;
 
 // Current time range setting (in hours)
 let currentTimeRange = 1;
@@ -60,7 +65,113 @@ document.addEventListener('DOMContentLoaded', function() {
     loadSettings();
     loadGrowthPhase();
     initializeDatabaseTab();
+    updateNetworkStatusUI();
+    initializePwaSupport();
 });
+
+function getEffectiveRefreshInterval() {
+    if (!navigator.onLine) {
+        return OFFLINE_REFRESH_INTERVAL;
+    }
+
+    return document.hidden ? BACKGROUND_REFRESH_INTERVAL : REFRESH_INTERVAL;
+}
+
+function runDataRefreshCycle() {
+    if (!navigator.onLine) {
+        updateNetworkStatusUI();
+        return;
+    }
+
+    loadSensorData();
+    loadCameraData();
+    checkSystemStatus();
+    refreshRelayStates();
+}
+
+function resetAutoRefreshTimers() {
+    if (dataRefreshTimer) {
+        clearInterval(dataRefreshTimer);
+    }
+    if (logsRefreshTimer) {
+        clearInterval(logsRefreshTimer);
+    }
+
+    dataRefreshTimer = setInterval(runDataRefreshCycle, getEffectiveRefreshInterval());
+
+    // Logs refresh less often when app is backgrounded or offline.
+    const logsInterval = (!navigator.onLine || document.hidden) ? 120000 : 30000;
+    logsRefreshTimer = setInterval(() => {
+        if (navigator.onLine) {
+            loadLogs();
+        }
+    }, logsInterval);
+}
+
+function updateNetworkStatusUI() {
+    const networkAlert = document.getElementById('network-alert');
+    if (networkAlert) {
+        networkAlert.classList.toggle('d-none', navigator.onLine);
+    }
+}
+
+function initializePwaSupport() {
+    const installButton = document.getElementById('install-app-btn');
+
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js').catch(err => {
+                console.warn('Service worker registration failed:', err);
+            });
+        });
+    }
+
+    window.addEventListener('beforeinstallprompt', (event) => {
+        event.preventDefault();
+        deferredInstallPrompt = event;
+        if (installButton) {
+            installButton.classList.remove('d-none');
+        }
+        updatePwaDebugStatus();
+    });
+
+    if (installButton) {
+        installButton.addEventListener('click', async () => {
+            if (!deferredInstallPrompt) {
+                return;
+            }
+
+            deferredInstallPrompt.prompt();
+            await deferredInstallPrompt.userChoice;
+            deferredInstallPrompt = null;
+            installButton.classList.add('d-none');
+        });
+    }
+
+    window.addEventListener('appinstalled', () => {
+        deferredInstallPrompt = null;
+        if (installButton) {
+            installButton.classList.add('d-none');
+        }
+        updatePwaDebugStatus();
+    });
+
+    window.addEventListener('online', () => {
+        updateNetworkStatusUI();
+        loadInitialData();
+        resetAutoRefreshTimers();
+    });
+
+    window.addEventListener('offline', () => {
+        updateNetworkStatusUI();
+        resetAutoRefreshTimers();
+    });
+
+    document.addEventListener('visibilitychange', resetAutoRefreshTimers);
+    
+    setupPwaDebugPanel();
+    updatePwaDebugStatus();
+}
 
 let dbTables = {};
 let dbState = {
@@ -986,6 +1097,20 @@ function loadInitialData() {
  * Check system status
  */
 function checkSystemStatus() {
+    if (!navigator.onLine) {
+        const statusBadge = document.getElementById('status-badge');
+        const statusText = document.getElementById('system-status');
+
+        if (statusBadge) {
+            statusBadge.className = 'badge bg-warning ms-2';
+            statusBadge.textContent = 'Offline';
+        }
+        if (statusText) {
+            statusText.textContent = 'Network offline';
+        }
+        return;
+    }
+
     fetch(`${API_BASE}/health`)
         .then(response => response.json())
         .then(data => {
@@ -1003,8 +1128,16 @@ function checkSystemStatus() {
             }
         })
         .catch(error => {
-            document.getElementById('status-badge').className = 'badge bg-danger ms-2';
-            document.getElementById('system-status').textContent = 'Connection error';
+            const statusBadge = document.getElementById('status-badge');
+            const statusText = document.getElementById('system-status');
+
+            if (statusBadge) {
+                statusBadge.className = 'badge bg-danger ms-2';
+                statusBadge.textContent = 'Offline';
+            }
+            if (statusText) {
+                statusText.textContent = 'Connection error';
+            }
         });
 }
 
@@ -1135,17 +1268,7 @@ function updateTimestamp() {
  * Start auto-refresh of data
  */
 function startAutoRefresh() {
-    setInterval(() => {
-        loadSensorData(); // Update current readings and add latest to history
-        loadCameraData();
-        checkSystemStatus();
-        refreshRelayStates();
-    }, REFRESH_INTERVAL);
-
-    // Refresh logs every 30 seconds
-    setInterval(() => {
-        loadLogs();
-    }, 30000);
+    resetAutoRefreshTimers();
 }
 
 /**
@@ -1169,5 +1292,119 @@ function getBadgeClass(level) {
         case 'ERROR': return 'bg-danger';
         case 'DEBUG': return 'bg-secondary';
         default: return 'bg-light text-dark';
+    }
+}
+
+/**
+ * Setup PWA debug panel interaction
+ */
+function setupPwaDebugPanel() {
+    const toggleBtn = document.getElementById('pwa-debug-toggle');
+    const closeBtn = document.getElementById('pwa-debug-close');
+    const content = document.getElementById('pwa-debug-content');
+
+    if (!toggleBtn || !content) {
+        return;
+    }
+
+    toggleBtn.addEventListener('click', () => {
+        content.classList.toggle('show');
+    });
+
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+            content.classList.remove('show');
+        });
+    }
+
+    document.addEventListener('click', (event) => {
+        const panel = document.getElementById('pwa-debug-panel');
+        if (!panel || panel.contains(event.target)) {
+            return;
+        }
+
+        content.classList.remove('show');
+    });
+}
+
+/**
+ * Update PWA diagnostics status display
+ */
+async function updatePwaDebugStatus() {
+    // Service Worker status
+    const swStatus = document.getElementById('pwa-sw-status');
+    if (swStatus) {
+        if ('serviceWorker' in navigator) {
+            try {
+                const reg = await navigator.serviceWorker.getRegistration();
+                if (reg) {
+                    const state = reg.active ? 'Active' : (reg.installing ? 'Installing' : 'Registered');
+                    swStatus.textContent = `✓ ${state}`;
+                    swStatus.className = 'pwa-badge-success';
+                } else {
+                    swStatus.textContent = '○ Not registered';
+                    swStatus.className = 'pwa-badge-warning';
+                }
+            } catch (e) {
+                swStatus.textContent = '✗ Error';
+                swStatus.className = 'pwa-badge-error';
+            }
+        } else {
+            swStatus.textContent = '✗ Not supported';
+            swStatus.className = 'pwa-badge-error';
+        }
+    }
+
+    // Display mode
+    const displayMode = document.getElementById('pwa-display-mode');
+    if (displayMode && window.matchMedia) {
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+        const mode = isStandalone ? 'Standalone' : 'Browser';
+        displayMode.textContent = mode;
+        displayMode.className = isStandalone ? 'pwa-badge-success' : '';
+    }
+
+    // Install prompt availability
+    const installReady = document.getElementById('pwa-install-ready');
+    if (installReady) {
+        if (deferredInstallPrompt) {
+            installReady.textContent = '✓ Ready';
+            installReady.className = 'pwa-badge-success';
+        } else {
+            installReady.textContent = '○ Not available';
+            installReady.className = 'pwa-badge-warning';
+        }
+    }
+
+    // Manifest status
+    const manifestStatus = document.getElementById('pwa-manifest-status');
+    if (manifestStatus) {
+        try {
+            const response = await fetch('/manifest.webmanifest');
+            if (response.ok) {
+                const manifest = await response.json();
+                manifestStatus.textContent = `✓ Loaded (${manifest.icons?.length || 0} icons)`;
+                manifestStatus.className = 'pwa-badge-success';
+            } else {
+                manifestStatus.textContent = '✗ Load failed';
+                manifestStatus.className = 'pwa-badge-error';
+            }
+        } catch (e) {
+            manifestStatus.textContent = '✗ Error';
+            manifestStatus.className = 'pwa-badge-error';
+        }
+    }
+
+    // HTTPS status
+    const httpsStatus = document.getElementById('pwa-https-status');
+    if (httpsStatus) {
+        const isSecure = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+        if (isSecure) {
+            httpsStatus.textContent = '✓ Secure';
+            httpsStatus.className = 'pwa-badge-success';
+        } else {
+            httpsStatus.textContent = '✗ HTTP only';
+            httpsStatus.className = 'pwa-badge-error';
+        }
     }
 }

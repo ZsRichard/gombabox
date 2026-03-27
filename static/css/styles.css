@@ -181,3 +181,201 @@ body {
 .latest-capture-img {
     max-height: 300px;
 }
+
+.pwa-debug-collapsed {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 9999;
+}
+
+.pwa-debug-toggle {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: #3498db;
+    color: white;
+    border: none;
+    font-size: 1.2rem;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    transition: all 0.3s;
+}
+
+.pwa-debug-toggle:hover {
+    background: #2980b9;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.pwa-debug-content {
+    display: none;
+    position: absolute;
+    bottom: 65px;
+    right: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    width: 280px;
+    max-height: 400px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+}
+
+.pwa-debug-content.show {
+    display: block;
+}
+
+.pwa-debug-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    border-bottom: 1px solid #eee;
+    background: #f8f9fa;
+}
+
+.pwa-debug-header h6 {
+    margin: 0;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.pwa-debug-close {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+.pwa-debug-body {
+    padding: 12px;
+}
+
+.pwa-debug-item {
+    margin-bottom: 10px;
+    padding: 8px;
+    background: #f8f9fa;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.pwa-debug-item:last-child {
+    margin-bottom: 0;
+}
+
+.pwa-debug-item strong {
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.pwa-debug-item span {
+    text-align: right;
+    flex: 1;
+    font-family: monospace;
+}
+
+.pwa-badge-success {
+    background: #d4edda;
+    color: #155724;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+.pwa-badge-error {
+    background: #f8d7da;
+    color: #721c24;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+.pwa-badge-warning {
+    background: #fff3cd;
+    color: #856404;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+.container-lg {
+    padding-left: 14px;
+    padding-right: 14px;
+}
+
+.nav-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+
+.nav-tabs .nav-item {
+    flex: 0 0 auto;
+}
+
+.nav-tabs .nav-link {
+    white-space: nowrap;
+}
+
+#install-app-btn {
+    margin-right: 0.75rem;
+}
+
+@media (max-width: 992px) {
+    .sensor-value {
+        font-size: 2rem;
+    }
+
+    .chart-container {
+        height: 240px;
+    }
+
+    .card-header {
+        padding: 0.9rem 1rem;
+        font-size: 0.95rem;
+    }
+
+    .relay-switch {
+        padding: 12px;
+    }
+
+    .btn,
+    .form-control,
+    .form-select {
+        min-height: 44px;
+    }
+}
+
+@media (max-width: 576px) {
+    .container-lg {
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+
+    .sensor-value {
+        font-size: 1.7rem;
+    }
+
+    .sensor-unit {
+        font-size: 1rem;
+    }
+
+    .card {
+        margin-bottom: 12px;
+    }
+
+    .tab-content {
+        padding: 12px 0;
+    }
+
+    .chart-container {
+        height: 210px;
+    }
+
+    .footer {
+        margin-top: 24px;
+        padding: 16px;
+    }
+}

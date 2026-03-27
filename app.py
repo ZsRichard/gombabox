@@ -26,7 +26,7 @@ import threading
 import subprocess
 import datetime
 import sqlite3
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 
 # Database
@@ -293,6 +293,22 @@ def index():
     except Exception as e:
         logger.error(f"Error loading dashboard: {e}")
         return jsonify({'error': 'Failed to load dashboard'}), 500
+
+
+@app.route('/manifest.webmanifest')
+def pwa_manifest():
+    """Serve web app manifest for PWA installability."""
+    response = send_from_directory('static', 'manifest.webmanifest', mimetype='application/manifest+json')
+    response.headers['Cache-Control'] = 'public, max-age=3600'
+    return response
+
+
+@app.route('/sw.js')
+def pwa_service_worker():
+    """Serve service worker from root scope for broad cache control."""
+    response = send_from_directory('static/js', 'sw.js', mimetype='application/javascript')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return response
 
 
 @app.route('/api/measurements', methods=['GET'])
