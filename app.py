@@ -46,7 +46,7 @@ from drivers.camera import MockCameraDriver, RealCameraDriver
 
 # Core
 from core.controller import MushroomController
-from core.constants import get_latest_capture_path, SSD_CAPTURE_DIRECTORY
+from core.constants import get_latest_capture_path, SSD_CAPTURE_DIRECTORY, get_ssd_capture_directory
 
 # Configure Flask
 app = Flask(__name__)
@@ -189,8 +189,15 @@ class DatabaseBackupManager:
 
     def _resolve_backup_dir(self):
         """Pick primary backup path if available, otherwise use fallback."""
-        if os.path.isdir(BACKUP_PRIMARY_PATH):
-            return BACKUP_PRIMARY_PATH
+        primary_mount = os.path.dirname(BACKUP_PRIMARY_PATH.rstrip(os.sep))
+        if os.path.ismount(primary_mount):
+            try:
+                os.makedirs(BACKUP_PRIMARY_PATH, exist_ok=True)
+                if os.access(BACKUP_PRIMARY_PATH, os.W_OK):
+                    return BACKUP_PRIMARY_PATH
+                logger.warning("Primary backup path is mounted but not writable: %s", BACKUP_PRIMARY_PATH)
+            except Exception as e:
+                logger.warning("Cannot prepare primary backup path %s: %s", BACKUP_PRIMARY_PATH, e)
 
         fallback_path = BACKUP_FALLBACK_PATH
         if not os.path.isabs(fallback_path):
@@ -440,10 +447,11 @@ def get_latest_capture():
 def serve_ssd_capture(filename):
     """Serve captures from SSD directory."""
     try:
-        filepath = os.path.join(SSD_CAPTURE_DIRECTORY, filename)
+        active_ssd_capture_dir = get_ssd_capture_directory() or SSD_CAPTURE_DIRECTORY
+        filepath = os.path.join(active_ssd_capture_dir, filename)
         
         # Security check: ensure the file is within the allowed directory
-        if not os.path.abspath(filepath).startswith(os.path.abspath(SSD_CAPTURE_DIRECTORY)):
+        if not os.path.abspath(filepath).startswith(os.path.abspath(active_ssd_capture_dir)):
             return jsonify({'error': 'Access denied'}), 403
         
         if not os.path.exists(filepath):
