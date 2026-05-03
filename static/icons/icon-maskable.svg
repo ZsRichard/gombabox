@@ -1,7 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#1f6d4b"/>
-  <circle cx="256" cy="230" r="145" fill="#2ecc71"/>
-  <circle cx="256" cy="220" r="105" fill="#ffffff"/>
-  <path d="M140 246c20-48 65-82 116-82s96 34 116 82" fill="#22a65e"/>
-  <rect x="224" y="246" width="64" height="150" rx="32" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">GombaBox maskable mushroom icon</title>
+  <desc id="desc">Mushroom icon with safe-zone background for maskable PWA icons.</desc>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#3a5a40"/>
+      <stop offset="100%" stop-color="#223328"/>
+    </radialGradient>
+    <linearGradient id="capGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2a252b"/>
+      <stop offset="100%" stop-color="#1f1b20"/>
+    </linearGradient>
+    <linearGradient id="stemGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2b252b"/>
+      <stop offset="100%" stop-color="#262128"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <g transform="translate(0 4) scale(0.86) translate(85 70)">
+    <path fill="url(#capGrad)" d="M512 168c-74 0-152 60-186 146-29 74-56 130-116 179-41 33-65 82-65 130 0 86 101 149 241 149h252c140 0 241-63 241-149 0-48-24-97-65-130-60-49-87-105-116-179-34-86-112-146-186-146z"/>
+    <ellipse cx="512" cy="635" rx="213" ry="53" fill="#050507"/>
+    <path fill="url(#stemGrad)" d="M426 614h172c23 0 42 16 48 38 22 87 34 172 34 256 0 63-50 114-114 114h-80c-64 0-114-51-114-114 0-84 12-169 34-256 6-22 25-38 48-38z"/>
+
+    <ellipse cx="416" cy="316" rx="47" ry="31" fill="#060709" transform="rotate(-10 416 316)"/>
+    <ellipse cx="578" cy="362" rx="43" ry="29" fill="#060709" transform="rotate(15 578 362)"/>
+    <ellipse cx="500" cy="430" rx="49" ry="31" fill="#060709"/>
+    <ellipse cx="343" cy="527" rx="46" ry="30" fill="#060709" transform="rotate(-32 343 527)"/>
+    <ellipse cx="690" cy="540" rx="42" ry="27" fill="#060709"/>
+  </g>
 </svg>

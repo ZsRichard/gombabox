@@ -801,6 +801,7 @@ def capture_now():
             lead_seconds = 0
 
         light_was_on = relay_driver.get_state(3)
+        relay_driver.camera_capture_active = True
         if not light_was_on:
             relay_driver.set_state(3, True)
 
@@ -812,6 +813,7 @@ def capture_now():
         finally:
             if not light_was_on:
                 relay_driver.set_state(3, False)
+            relay_driver.camera_capture_active = False
         
         if not image_path:
             return jsonify({'error': 'Failed to capture image'}), 500

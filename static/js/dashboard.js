@@ -65,9 +65,85 @@ document.addEventListener('DOMContentLoaded', function() {
     loadSettings();
     loadGrowthPhase();
     initializeDatabaseTab();
+    initializeMediaExportDates();
     updateNetworkStatusUI();
     initializePwaSupport();
 });
+
+function initializeMediaExportDates() {
+    const startInput = document.getElementById('timelapse-start-date');
+    const endInput = document.getElementById('timelapse-end-date');
+    if (!startInput || !endInput) {
+        return;
+    }
+
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(start.getDate() - 1);
+
+    startInput.value = toDateInputValue(start);
+    endInput.value = toDateInputValue(now);
+}
+
+function toDateInputValue(dateObj) {
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+async function parseApiResponse(response) {
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/json')) {
+        return response.json();
+    }
+
+    const text = await response.text();
+    const snippet = text.replace(/\s+/g, ' ').slice(0, 120);
+    throw new Error(`Server returned non-JSON response (${response.status}): ${snippet}`);
+}
+
+async function postJson(path, payload) {
+    const response = await fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+
+    const data = await parseApiResponse(response);
+    if (!response.ok) {
+        const errorMessage = data && data.error ? data.error : `Request failed with status ${response.status}`;
+        throw new Error(errorMessage);
+    }
+
+    if (data && data.error) {
+        throw new Error(data.error);
+    }
+
+    return data;
+}
+
+function buildDateRangePayload() {
+    const startInput = document.getElementById('timelapse-start-date');
+    const endInput = document.getElementById('timelapse-end-date');
+    if (!startInput || !endInput) {
+        throw new Error('Date fields are not available on this page.');
+    }
+
+    const startDate = (startInput.value || '').trim();
+    const endDate = (endInput.value || '').trim();
+    if (!startDate || !endDate) {
+        throw new Error('Please select both start and end dates.');
+    }
+
+    const start = `${startDate}T00:00:00`;
+    const end = `${endDate}T23:59:59`;
+    if (new Date(start) > new Date(end)) {
+        throw new Error('Start date must be earlier than or equal to end date.');
+    }
+
+    return { start, end };
+}
 
 function getEffectiveRefreshInterval() {
     if (!navigator.onLine) {
@@ -1190,6 +1266,115 @@ function restartSystem() {
         .catch(() => {
             alert('Restart requested. Connection may drop while the service restarts.');
             setTimeout(checkSystemStatus, 8000);
+        });
+}
+
+function setMediaExportStatus(message, isError = false) {
+    const statusEl = document.getElementById('media-export-status');
+    if (!statusEl) {
+        return;
+    }
+
+    if (!message) {
+        statusEl.classList.add('d-none');
+        statusEl.textContent = '';
+        return;
+    }
+
+    statusEl.textContent = message;
+    statusEl.classList.remove('d-none');
+    statusEl.classList.toggle('alert-danger-custom', isError);
+    statusEl.classList.toggle('alert-info-custom', !isError);
+}
+
+function generateTimelapse() {
+    const fpsInput = document.getElementById('timelapse-fps');
+    const button = document.getElementById('generate-timelapse-btn');
+    const resultEl = document.getElementById('timelapse-result');
+    const linkEl = document.getElementById('timelapse-link');
+
+    if (!fpsInput || !button || !resultEl || !linkEl) {
+        return;
+    }
+
+    const fps = parseInt(fpsInput.value, 10);
+    if (!Number.isInteger(fps) || fps < 1 || fps > 60) {
+        setMediaExportStatus('Please set FPS to a value between 1 and 60.', true);
+        return;
+    }
+
+    let payload;
+    try {
+        payload = buildDateRangePayload();
+        payload.fps = fps;
+    } catch (error) {
+        setMediaExportStatus(`Timelapse setup error: ${error.message || error}`, true);
+        return;
+    }
+
+    const originalHtml = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+    resultEl.classList.add('d-none');
+    setMediaExportStatus('Building timelapse. This can take a while for large image sets...');
+
+    postJson('/camera/timelapse', payload)
+        .then(data => {
+            linkEl.href = data.video_url;
+            resultEl.classList.remove('d-none');
+            setMediaExportStatus(`Timelapse ready (${data.frames} frames, ${data.duration_seconds}s at ${data.fps} fps).`);
+        })
+        .catch(error => {
+            setMediaExportStatus(`Timelapse error: ${error.message || error}`, true);
+        })
+        .finally(() => {
+            button.disabled = false;
+            button.innerHTML = originalHtml;
+        });
+}
+
+function exportAnalyticsReport() {
+    const button = document.getElementById('export-analytics-btn');
+    const resultEl = document.getElementById('analytics-result');
+    const svgLink = document.getElementById('analytics-svg-link');
+    const measurementsLink = document.getElementById('analytics-measurements-link');
+    const capturesLink = document.getElementById('analytics-captures-link');
+    const summaryLink = document.getElementById('analytics-summary-link');
+
+    if (!button || !resultEl || !svgLink || !measurementsLink || !capturesLink || !summaryLink) {
+        return;
+    }
+
+    let payload;
+    try {
+        payload = buildDateRangePayload();
+    } catch (error) {
+        setMediaExportStatus(`Analytics setup error: ${error.message || error}`, true);
+        return;
+    }
+
+    const originalHtml = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Exporting...';
+    resultEl.classList.add('d-none');
+    setMediaExportStatus('Preparing analytics export...');
+
+    postJson('/reports/analytics', payload)
+        .then(data => {
+            const files = data.files || {};
+            svgLink.href = files.chart_svg_url || '#';
+            measurementsLink.href = files.measurements_csv_url || '#';
+            capturesLink.href = files.captures_csv_url || '#';
+            summaryLink.href = files.summary_json_url || '#';
+            resultEl.classList.remove('d-none');
+            setMediaExportStatus('Analytics export ready. Open the generated files from the links below.');
+        })
+        .catch(error => {
+            setMediaExportStatus(`Analytics export error: ${error.message || error}`, true);
+        })
+        .finally(() => {
+            button.disabled = false;
+            button.innerHTML = originalHtml;
         });
 }
 

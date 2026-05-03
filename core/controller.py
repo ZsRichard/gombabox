@@ -265,6 +265,7 @@ class MushroomController:
         self._fan_next_allowed_pulse_at = 0.0
         self._humidifier_pulse_end_at = 0.0
         self._humidifier_next_allowed_pulse_at = 0.0
+        camera_capture_active = getattr(self.relays, "camera_capture_active", False)
 
         if self.relays.get_state(RELAY_ID_FAN):
             self.relays.set_state(RELAY_ID_FAN, False)
@@ -274,7 +275,7 @@ class MushroomController:
             self.relays.set_state(RELAY_ID_HUMIDIFIER, False)
             self._log_system_event("INFO", "Humidifier OFF (Colonization phase)")
 
-        if self.relays.get_state(RELAY_ID_LIGHT):
+        if self.relays.get_state(RELAY_ID_LIGHT) and not camera_capture_active:
             self.relays.set_state(RELAY_ID_LIGHT, False)
             self._log_system_event("INFO", "Light OFF (Colonization phase)")
 
@@ -294,6 +295,9 @@ class MushroomController:
 
         was_on = self.relays.get_state(RELAY_ID_LIGHT)
 
+        # Keep colonization mode from forcing the LED off while a capture is active.
+        self.relays.camera_capture_active = True
+
         if not was_on:
             self.relays.set_state(RELAY_ID_LIGHT, True)
             self._log_system_event("INFO", "Camera light ON for capture")
@@ -308,9 +312,12 @@ class MushroomController:
 
     def _restore_camera_light(self, was_on):
         """Restore LED to previous state after capture."""
-        if not was_on:
-            self.relays.set_state(RELAY_ID_LIGHT, False)
-            self._log_system_event("INFO", "Camera light OFF after capture")
+        try:
+            if not was_on:
+                self.relays.set_state(RELAY_ID_LIGHT, False)
+                self._log_system_event("INFO", "Camera light OFF after capture")
+        finally:
+            self.relays.camera_capture_active = False
 
     def _save_measurement(self, data):
         """Persisting sensor data."""
