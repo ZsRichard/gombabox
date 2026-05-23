@@ -26,6 +26,8 @@ import threading
 import subprocess
 import datetime
 import sqlite3
+import shutil
+import tempfile
 from flask import Flask, jsonify, render_template, request, send_file, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 
@@ -260,6 +262,182 @@ relay_driver = _create_relay_driver()
 # Global instances
 task_manager = BackgroundTaskManager(app, db.session, relay_driver)
 backup_manager = DatabaseBackupManager(app, DATABASE_URI)
+
+
+def _parse_client_datetime(value, field_name):
+    """Parse datetime-local payload values from API clients."""
+    if not value:
+        raise ValueError(f"Missing '{field_name}' parameter")
+
+    try:
+        return datetime.datetime.fromisoformat(str(value))
+    except ValueError as exc:
+        raise ValueError(f"Invalid datetime for '{field_name}'") from exc
+
+
+def _normalize_capture_directory(capture_dir):
+    """Resolve and validate a user-supplied capture directory path."""
+    if not capture_dir:
+        return None
+
+    resolved_dir = os.path.abspath(os.path.expanduser(str(capture_dir).strip()))
+    if not os.path.isdir(resolved_dir):
+        raise ValueError(f"Capture directory not found: {capture_dir}")
+
+    return resolved_dir
+
+
+def _capture_search_directories(preferred_dir=None):
+    """Return ordered capture directories where images may exist."""
+    directories = []
+
+    if preferred_dir:
+        directories.append(preferred_dir)
+
+    ssd_capture_dir = get_ssd_capture_directory()
+    if ssd_capture_dir:
+        directories.append(ssd_capture_dir)
+
+    sd_capture_dir = os.path.join(app.root_path, 'static', 'captures')
+    directories.append(sd_capture_dir)
+
+    return directories
+
+
+def _resolve_capture_file_path(filename, preferred_dir=None):
+    """Resolve capture filename to a real file path in SSD/SD capture stores."""
+    for directory in _capture_search_directories(preferred_dir):
+        candidate = os.path.join(directory, filename)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _collect_capture_paths(start_dt, end_dt, preferred_dir=None):
+    """Collect capture file paths from DB metadata, with mtime fallback scan."""
+    if preferred_dir:
+        folder_candidates = []
+        try:
+            for filename in os.listdir(preferred_dir):
+                if not filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    continue
+
+                path = os.path.join(preferred_dir, filename)
+                if not os.path.isfile(path):
+                    continue
+
+                mtime = os.path.getmtime(path)
+                if start_dt.timestamp() <= mtime <= end_dt.timestamp():
+                    folder_candidates.append((mtime, path))
+        except Exception as scan_error:
+            logger.warning("Capture directory scan failed for %s: %s", preferred_dir, scan_error)
+
+        folder_candidates.sort(key=lambda item: item[0])
+        if folder_candidates:
+            return [path for _, path in folder_candidates]
+
+    captures = CameraCapture.query.filter(
+        CameraCapture.timestamp >= start_dt,
+        CameraCapture.timestamp <= end_dt
+    ).order_by(CameraCapture.timestamp.asc()).all()
+
+    file_paths = []
+    seen = set()
+
+    for capture in captures:
+        resolved_path = _resolve_capture_file_path(capture.filename, preferred_dir)
+        if not resolved_path or resolved_path in seen:
+            continue
+        seen.add(resolved_path)
+        file_paths.append(resolved_path)
+
+    if file_paths:
+        return file_paths
+
+    # Fallback for captures not present in DB: scan directories by file modification time.
+    start_ts = start_dt.timestamp()
+    end_ts = end_dt.timestamp()
+    fallback_candidates = []
+
+    for directory in _capture_search_directories(preferred_dir):
+        if not os.path.isdir(directory):
+            continue
+
+        try:
+            for filename in os.listdir(directory):
+                if not filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    continue
+
+                path = os.path.join(directory, filename)
+                if not os.path.isfile(path):
+                    continue
+
+                mtime = os.path.getmtime(path)
+                if start_ts <= mtime <= end_ts:
+                    fallback_candidates.append((mtime, path))
+        except Exception as scan_error:
+            logger.warning("Capture directory scan failed for %s: %s", directory, scan_error)
+
+    fallback_candidates.sort(key=lambda item: item[0])
+    return [path for _, path in fallback_candidates]
+
+
+def _probe_video_stats(video_path):
+    """Return actual duration/frame metadata for a generated video when available."""
+    ffprobe = shutil.which('ffprobe')
+    if not ffprobe or not os.path.exists(video_path):
+        return None
+
+
+def _build_timelapse_scale_filter(max_width=1280):
+    """Return an ffmpeg scale filter that preserves aspect ratio and avoids odd dimensions."""
+    return f"scale='if(gt(iw,{max_width}),{max_width},iw)':-2"
+
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                '-v', 'error',
+                '-print_format', 'json',
+                '-show_entries', 'format=duration:stream=nb_frames',
+                video_path
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0 or not result.stdout:
+            return None
+
+        import json
+        payload = json.loads(result.stdout)
+        duration = None
+        frame_count = None
+
+        format_info = payload.get('format') or {}
+        if format_info.get('duration') is not None:
+            try:
+                duration = float(format_info['duration'])
+            except (TypeError, ValueError):
+                duration = None
+
+        for stream in payload.get('streams', []) or []:
+            nb_frames = stream.get('nb_frames')
+            if nb_frames and nb_frames != 'N/A':
+                try:
+                    frame_count = int(nb_frames)
+                    break
+                except (TypeError, ValueError):
+                    pass
+
+        return {
+            'duration_seconds': duration,
+            'frame_count': frame_count
+        }
+    except Exception as e:
+        logger.warning("Video probe failed for %s: %s", video_path, e)
+        return None
 
 
 def _restart_service_async():
@@ -844,6 +1022,119 @@ def capture_now():
         logger.error(f"Manual capture error: {e}")
         logger.exception(e)
         return jsonify({'error': 'Failed to capture image'}), 500
+
+
+@app.route('/api/camera/timelapse', methods=['POST'])
+def create_timelapse():
+    """Create a timelapse video from captured images within a selected time range."""
+    if not request.json:
+        return jsonify({'error': 'Missing JSON payload'}), 400
+
+    try:
+        start_dt = _parse_client_datetime(request.json.get('start'), 'start')
+        end_dt = _parse_client_datetime(request.json.get('end'), 'end')
+        capture_dir = _normalize_capture_directory(request.json.get('capture_dir'))
+    except ValueError as validation_error:
+        return jsonify({'error': str(validation_error)}), 400
+
+    if start_dt > end_dt:
+        return jsonify({'error': 'Start time must be earlier than end time'}), 400
+
+    fps = request.json.get('fps', 15)
+    try:
+        fps = int(fps)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'FPS must be an integer'}), 400
+
+    if fps < 1 or fps > 60:
+        return jsonify({'error': 'FPS must be between 1 and 60'}), 400
+
+    if not shutil.which('ffmpeg'):
+        return jsonify({'error': 'ffmpeg is not installed on this system'}), 500
+
+    try:
+        db_capture_count = CameraCapture.query.filter(
+            CameraCapture.timestamp >= start_dt,
+            CameraCapture.timestamp <= end_dt
+        ).count()
+
+        image_paths = _collect_capture_paths(start_dt, end_dt, capture_dir)
+        if len(image_paths) < 2:
+            if db_capture_count >= 2:
+                return jsonify({
+                    'error': (
+                        f"Found {db_capture_count} capture records in the selected range, "
+                        f"but only {len(image_paths)} image files are currently accessible. "
+                        "Your capture storage may be unmounted or the chosen folder does not match the source images."
+                    ),
+                    'db_capture_count': db_capture_count,
+                    'accessible_file_count': len(image_paths),
+                    'capture_dir': capture_dir
+                }), 400
+
+            return jsonify({
+                'error': 'Not enough images in selected range (minimum 2)',
+                'db_capture_count': db_capture_count,
+                'accessible_file_count': len(image_paths),
+                'capture_dir': capture_dir
+            }), 400
+
+        output_dir = os.path.join(app.root_path, 'static', 'exports', 'timelapses')
+        os.makedirs(output_dir, exist_ok=True)
+
+        timestamp_tag = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_name = f"timelapse_{timestamp_tag}.mp4"
+        output_path = os.path.join(output_dir, output_name)
+
+        with tempfile.TemporaryDirectory(prefix='gombabox_timelapse_') as temp_dir:
+            for index, image_path in enumerate(image_paths, start=1):
+                _, extension = os.path.splitext(image_path)
+                link_name = os.path.join(temp_dir, f"frame_{index:06d}{extension.lower() or '.jpg'}")
+                try:
+                    os.symlink(image_path, link_name)
+                except OSError:
+                    shutil.copy2(image_path, link_name)
+
+            ffmpeg_command = [
+                'ffmpeg',
+                '-y',
+                '-framerate', str(fps),
+                '-i', os.path.join(temp_dir, 'frame_%06d.jpg'),
+                '-vf', _build_timelapse_scale_filter(1280),
+                '-c:v', 'libx264',
+                '-preset', 'veryfast',
+                '-crf', '28',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                output_path
+            ]
+
+            result = subprocess.run(
+                ffmpeg_command,
+                capture_output=True,
+                text=True,
+                timeout=600
+            )
+
+            if result.returncode != 0:
+                logger.error("Timelapse ffmpeg failed: %s", result.stderr)
+                return jsonify({'error': 'Timelapse generation failed. Check ffmpeg logs.'}), 500
+
+        return jsonify({
+            'status': 'ok',
+            'video_url': f"/static/exports/timelapses/{output_name}",
+            'frames': len(image_paths),
+            'fps': fps,
+            'duration_seconds': round(len(image_paths) / fps, 2),
+            'start': start_dt.isoformat(),
+            'end': end_dt.isoformat(),
+            'capture_dir': capture_dir,
+            'video_stats': _probe_video_stats(output_path)
+        })
+    except Exception as e:
+        logger.error(f"Timelapse generation error: {e}")
+        logger.exception(e)
+        return jsonify({'error': 'Failed to create timelapse'}), 500
 
 
 # Flask Application Startup

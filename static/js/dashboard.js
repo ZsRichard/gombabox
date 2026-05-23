@@ -73,6 +73,7 @@ document.addEventListener('DOMContentLoaded', function() {
 function initializeMediaExportDates() {
     const startInput = document.getElementById('timelapse-start-date');
     const endInput = document.getElementById('timelapse-end-date');
+    const captureDirInput = document.getElementById('timelapse-capture-dir');
     if (!startInput || !endInput) {
         return;
     }
@@ -80,16 +81,28 @@ function initializeMediaExportDates() {
     const now = new Date();
     const start = new Date(now);
     start.setDate(start.getDate() - 1);
+    start.setSeconds(0, 0);
+    now.setSeconds(0, 0);
 
-    startInput.value = toDateInputValue(start);
-    endInput.value = toDateInputValue(now);
+    startInput.value = toDateTimeLocalInputValue(start);
+    endInput.value = toDateTimeLocalInputValue(now);
+
+    if (captureDirInput) {
+        const savedCaptureDir = localStorage.getItem('gombabox_timelapse_capture_dir') || '';
+        captureDirInput.value = savedCaptureDir;
+        captureDirInput.addEventListener('change', () => {
+            localStorage.setItem('gombabox_timelapse_capture_dir', captureDirInput.value.trim());
+        });
+    }
 }
 
-function toDateInputValue(dateObj) {
+function toDateTimeLocalInputValue(dateObj) {
     const year = dateObj.getFullYear();
     const month = String(dateObj.getMonth() + 1).padStart(2, '0');
     const day = String(dateObj.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    const hours = String(dateObj.getHours()).padStart(2, '0');
+    const minutes = String(dateObj.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
 async function parseApiResponse(response) {
@@ -126,23 +139,35 @@ async function postJson(path, payload) {
 function buildDateRangePayload() {
     const startInput = document.getElementById('timelapse-start-date');
     const endInput = document.getElementById('timelapse-end-date');
+    const captureDirInput = document.getElementById('timelapse-capture-dir');
     if (!startInput || !endInput) {
         throw new Error('Date fields are not available on this page.');
     }
 
-    const startDate = (startInput.value || '').trim();
-    const endDate = (endInput.value || '').trim();
-    if (!startDate || !endDate) {
-        throw new Error('Please select both start and end dates.');
+    const start = (startInput.value || '').trim();
+    const end = (endInput.value || '').trim();
+    if (!start || !end) {
+        throw new Error('Please select both start and end times.');
     }
 
-    const start = `${startDate}T00:00:00`;
-    const end = `${endDate}T23:59:59`;
-    if (new Date(start) > new Date(end)) {
-        throw new Error('Start date must be earlier than or equal to end date.');
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+        throw new Error('Invalid date range. Please use valid start/end values.');
     }
 
-    return { start, end };
+    if (startDate > endDate) {
+        throw new Error('Start time must be earlier than or equal to end time.');
+    }
+
+    const payload = { start, end };
+    const captureDir = captureDirInput ? captureDirInput.value.trim() : '';
+    if (captureDir) {
+        payload.capture_dir = captureDir;
+    }
+
+    return payload;
 }
 
 function getEffectiveRefreshInterval() {
@@ -1319,7 +1344,10 @@ function generateTimelapse() {
         .then(data => {
             linkEl.href = data.video_url;
             resultEl.classList.remove('d-none');
-            setMediaExportStatus(`Timelapse ready (${data.frames} frames, ${data.duration_seconds}s at ${data.fps} fps).`);
+            const stats = data.video_stats || {};
+            const videoDuration = typeof stats.duration_seconds === 'number' ? stats.duration_seconds.toFixed(2) : data.duration_seconds;
+            const videoFrames = stats.frame_count || data.frames;
+            setMediaExportStatus(`Timelapse ready (${videoFrames} frames, ${videoDuration}s at ${data.fps} fps).`);
         })
         .catch(error => {
             setMediaExportStatus(`Timelapse error: ${error.message || error}`, true);

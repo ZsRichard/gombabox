@@ -151,6 +151,49 @@
                     </div>
                 </div>
 
+                <!-- Timelapse Creator -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-film"></i> Timelapse Creator
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3 align-items-end">
+                                    <div class="col-md-3">
+                                        <label for="timelapse-start-date" class="form-label">Start time</label>
+                                        <input type="datetime-local" class="form-control" id="timelapse-start-date">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="timelapse-end-date" class="form-label">End time</label>
+                                        <input type="datetime-local" class="form-control" id="timelapse-end-date">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label for="timelapse-fps" class="form-label">FPS</label>
+                                        <input type="number" min="1" max="60" step="1" value="15" class="form-control" id="timelapse-fps">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="timelapse-capture-dir" class="form-label">Capture folder (optional)</label>
+                                        <input type="text" class="form-control" id="timelapse-capture-dir" placeholder="/media/richard/GOMBABOX/Gombabox_captures">
+                                    </div>
+                                </div>
+                                <div class="row g-3 mt-1 align-items-end">
+                                    <div class="col-md-2 ms-auto">
+                                        <button class="btn btn-primary w-100" id="generate-timelapse-btn" onclick="generateTimelapse()">
+                                            <i class="fas fa-wand-magic-sparkles"></i> Build
+                                        </button>
+                                    </div>
+                                </div>
+                                <div id="media-export-status" class="alert alert-custom alert-info-custom mt-3 d-none"></div>
+                                <div id="timelapse-result" class="alert alert-custom alert-info-custom mt-3 d-none">
+                                    Timelapse ready:
+                                    <a id="timelapse-link" href="#" target="_blank" rel="noopener">Open video</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Time Range Selector -->
                 <div class="row mt-4">
                     <div class="col-12">
