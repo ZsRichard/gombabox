@@ -198,7 +198,18 @@ class ImageAnalyzer:
                 where=max_val > 0
             )
 
-        white_mask = (gray > MYCELIUM_LOWER_V) & (saturation < 0.2)
+        white_mask = (gray > MYCELIUM_LOWER_V) & (saturation < 0.25)
+
+        # Expand the mask by one pixel in every direction so fuzzy colony edges count too.
+        if white_mask.any():
+            padded = np.pad(white_mask, 1, mode='constant', constant_values=False)
+            expanded_mask = np.zeros_like(white_mask, dtype=bool)
+            height, width = white_mask.shape
+            for dy in range(3):
+                for dx in range(3):
+                    expanded_mask |= padded[dy:dy + height, dx:dx + width]
+            white_mask = expanded_mask
+
         total_pixels = white_mask.size
         white_pixels = np.sum(white_mask)
         return white_pixels, total_pixels

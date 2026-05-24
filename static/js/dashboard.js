@@ -1574,10 +1574,23 @@ function loadCoverageComparison() {
         previewButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Recalculating...';
     }
 
-    Promise.all([
-        fetch(`${API_BASE}/camera/history/compare?start=${encodeURIComponent(startValue)}&end=${encodeURIComponent(endValue)}&sample_every_hours=${encodeURIComponent(sampleEveryHours)}&crop_top=${encodeURIComponent(topCrop)}&crop_left=${encodeURIComponent(leftCrop)}&crop_right=${encodeURIComponent(rightCrop)}&crop_bottom=${encodeURIComponent(bottomCrop)}`).then(response => response.json()),
-        fetch(`${API_BASE}/camera/history/preview-image?start=${encodeURIComponent(startValue)}&end=${encodeURIComponent(endValue)}&sample_every_hours=${encodeURIComponent(sampleEveryHours)}&crop_top=${encodeURIComponent(topCrop)}&crop_left=${encodeURIComponent(leftCrop)}&crop_right=${encodeURIComponent(rightCrop)}&crop_bottom=${encodeURIComponent(bottomCrop)}`).then(response => response.json())
-    ])
+    // First request the compare summary which contains the selected max capture filename,
+    // then explicitly request the preview for that filename to ensure deterministic preview.
+    fetch(`${API_BASE}/camera/history/compare?start=${encodeURIComponent(startValue)}&end=${encodeURIComponent(endValue)}&sample_every_hours=${encodeURIComponent(sampleEveryHours)}&crop_top=${encodeURIComponent(topCrop)}&crop_left=${encodeURIComponent(leftCrop)}&crop_right=${encodeURIComponent(rightCrop)}&crop_bottom=${encodeURIComponent(bottomCrop)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                throw new Error(data.error);
+            }
+
+            const summary = data.summary || {};
+            const maxFilename = summary.max_capture_filename || '';
+
+            const previewUrlBase = `${API_BASE}/camera/history/preview-image?start=${encodeURIComponent(startValue)}&end=${encodeURIComponent(endValue)}&sample_every_hours=${encodeURIComponent(sampleEveryHours)}&crop_top=${encodeURIComponent(topCrop)}&crop_left=${encodeURIComponent(leftCrop)}&crop_right=${encodeURIComponent(rightCrop)}&crop_bottom=${encodeURIComponent(bottomCrop)}`;
+            const previewUrl = maxFilename ? `${previewUrlBase}&filename=${encodeURIComponent(maxFilename)}` : previewUrlBase;
+
+            return Promise.all([Promise.resolve(data), fetch(previewUrl).then(r => r.json())]);
+        })
         .then(([data, previewImageData]) => {
             if (data.error) {
                 updateChartDataInfo(`Preview failed: ${data.error}`);
@@ -1610,7 +1623,13 @@ function loadCoverageComparison() {
                     previewMetaEl.textContent = `${previewImageData.filename || 'Preview'} · ${Number(previewImageData.original_coverage || 0).toFixed(2)}% -> ${Number(previewImageData.preprocessed_coverage || 0).toFixed(2)}%`;
                 }
             } else if (previewMetaEl) {
-                previewMetaEl.textContent = 'No preview image available for this interval.';
+                // Show debug info when image is not available
+                if (previewImageData && previewImageData.debug) {
+                    const dbg = previewImageData.debug;
+                    previewMetaEl.textContent = `Preview unavailable — file: ${dbg.chosen_filename || 'n/a'}; exists: ${dbg.capture_exists === undefined ? 'unknown' : dbg.capture_exists}; path: ${dbg.capture_path || 'n/a'}`;
+                } else {
+                    previewMetaEl.textContent = 'No preview image available for this interval.';
+                }
             }
 
             const summary = data.summary || {};

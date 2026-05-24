@@ -895,10 +895,17 @@ def preview_camera_history_image():
         if start_dt > end_dt:
             return jsonify({'error': 'Start time must be earlier than end time'}), 400
 
-        capture = CameraCapture.query.filter(
-            CameraCapture.timestamp >= start_dt,
-            CameraCapture.timestamp <= end_dt
-        ).order_by(CameraCapture.timestamp.asc()).first()
+        # Allow deterministic preview by filename when provided by the frontend
+        filename_param = request.args.get('filename')
+        if filename_param:
+            capture = CameraCapture.query.filter_by(filename=filename_param).first()
+            if not capture:
+                return jsonify({'error': 'Requested capture filename not found in database'}), 404
+        else:
+            capture = CameraCapture.query.filter(
+                CameraCapture.timestamp >= start_dt,
+                CameraCapture.timestamp <= end_dt
+            ).order_by(CameraCapture.timestamp.asc()).first()
         sample_hours = _parse_sampling_hours(request.args.get('sample_every_hours', 1))
 
         if capture:
@@ -913,6 +920,8 @@ def preview_camera_history_image():
             best_val = None
             best_capture = None
             crop_params = _parse_crop_params_from_request()
+            from PIL import Image
+
             for c in sampled_captures:
                 p = resolve_capture_file_path(c.filename)
                 if not p:
@@ -938,16 +947,27 @@ def preview_camera_history_image():
             return jsonify({'error': 'Capture file not found'}), 404
 
         crop_params = _parse_crop_params_from_request()
-        composite_image, original_coverage, preprocessed_coverage = _build_preprocessing_composite_image(capture_path, crop_params=crop_params)
+        try:
+            composite_image, original_coverage, preprocessed_coverage = _build_preprocessing_composite_image(capture_path, crop_params=crop_params)
+            image_data = _encode_pil_image_data_url(composite_image)
+            debug_info = {
+                'chosen_filename': capture.filename,
+                'capture_path': capture_path,
+                'capture_exists': os.path.exists(capture_path)
+            }
 
-        return jsonify({
-            'filename': capture.filename,
-            'timestamp': capture.timestamp.isoformat(),
-            'original_coverage': original_coverage,
-            'preprocessed_coverage': preprocessed_coverage,
-            'sample_every_hours': sample_hours,
-            'image_data_url': _encode_pil_image_data_url(composite_image)
-        })
+            return jsonify({
+                'filename': capture.filename,
+                'timestamp': capture.timestamp.isoformat(),
+                'original_coverage': original_coverage,
+                'preprocessed_coverage': preprocessed_coverage,
+                'sample_every_hours': sample_hours,
+                'image_data_url': image_data,
+                'debug': debug_info
+            })
+        except Exception as e:
+            logger.exception('Failed to build composite image for preview')
+            return jsonify({'error': 'Failed to build preview image', 'debug': {'chosen_filename': getattr(capture, 'filename', None), 'exception': str(e)}}), 500
     except Exception as e:
         logger.error(f"Error building preview image: {e}")
         return jsonify({'error': 'Failed to build preview image'}), 500
