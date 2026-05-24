@@ -25,6 +25,8 @@ import logging
 import threading
 import subprocess
 import datetime
+import base64
+import io
 import sqlite3
 import shutil
 import tempfile
@@ -47,8 +49,13 @@ from drivers.sensors import MockSensorDriver, RealSensorDriver
 from drivers.camera import MockCameraDriver, RealCameraDriver
 
 # Core
-from core.controller import MushroomController
-from core.constants import get_latest_capture_path, SSD_CAPTURE_DIRECTORY, get_ssd_capture_directory
+from core.controller import MushroomController, CAMERA_FOCUS_TIME_S
+from core.constants import (
+    get_latest_capture_path,
+    resolve_capture_file_path,
+    SSD_CAPTURE_DIRECTORY,
+    get_ssd_capture_directory
+)
 
 # Configure Flask
 app = Flask(__name__)
@@ -311,6 +318,161 @@ def _resolve_capture_file_path(filename, preferred_dir=None):
         if os.path.isfile(candidate):
             return candidate
     return None
+
+
+def _capture_analysis_value(capture, capture_path=None):
+    """Return the stored capture analysis, or compute it from the image when missing."""
+    raw_analysis = capture.analysis_result
+    if raw_analysis is not None and str(raw_analysis).strip():
+        return _parse_analysis_value(raw_analysis)
+
+    if capture_path:
+        from core.vision import ImageAnalyzer
+        return ImageAnalyzer.calculate_mycelium_coverage(capture_path)
+
+    return 0.0
+
+
+def _parse_sampling_hours(value):
+    """Parse the requested sampling interval in hours and clamp invalid values."""
+    try:
+        if value is None:
+            return 1.0
+
+        parsed = float(str(value).strip())
+        if parsed <= 0:
+            return 1.0
+
+        return min(parsed, 720.0)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _sample_captures_by_interval(captures, sample_hours):
+    """Return captures spaced at least sample_hours apart."""
+    if not captures:
+        return []
+
+    sample_hours = _parse_sampling_hours(sample_hours)
+    if sample_hours <= 0:
+        return list(captures)
+
+    sampled_captures = []
+    next_allowed_at = None
+    interval_delta = datetime.timedelta(hours=sample_hours)
+
+    for capture in captures:
+        if next_allowed_at is None or capture.timestamp >= next_allowed_at:
+            sampled_captures.append(capture)
+            next_allowed_at = capture.timestamp + interval_delta
+
+    return sampled_captures
+
+
+def _encode_pil_image_data_url(image, image_format='PNG'):
+    buffer = io.BytesIO()
+    image.save(buffer, format=image_format)
+    encoded = base64.b64encode(buffer.getvalue()).decode('ascii')
+    return f"data:image/{image_format.lower()};base64,{encoded}"
+
+
+def _parse_crop_params_from_request():
+    """Read crop params from request args and return a dict of percentages or None."""
+    def _get(name):
+        v = request.args.get(name)
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            # clamp to [0, 40]
+            if f < 0:
+                f = 0.0
+            if f > 40:
+                f = 40.0
+            return f
+        except Exception:
+            return None
+
+    top = _get('crop_top')
+    left = _get('crop_left')
+    right = _get('crop_right')
+    bottom = _get('crop_bottom')
+
+    if top is None and left is None and right is None and bottom is None:
+        return None
+
+    return {
+        'top': top or 0.0,
+        'left': left or 0.0,
+        'right': right or 0.0,
+        'bottom': bottom or 0.0
+    }
+
+
+def _build_preprocessing_composite_image(image_path, crop_params=None):
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    from core.vision import ImageAnalyzer
+
+    with Image.open(image_path) as source_image:
+        original_image = source_image.convert('RGB').copy()
+
+    preprocessed_image = ImageAnalyzer.create_preprocessing_preview_image(original_image, crop_params=crop_params)
+
+    original_coverage = ImageAnalyzer.calculate_mycelium_coverage_from_image(original_image)
+    preprocessed_coverage = ImageAnalyzer.calculate_mycelium_coverage_from_image(preprocessed_image)
+
+    target_height = 360
+    gap = 20
+    header_height = 60
+
+    def fit_image(image):
+        ratio = target_height / float(image.height)
+        new_width = max(1, int(image.width * ratio))
+        return image.resize((new_width, target_height), Image.Resampling.LANCZOS)
+
+    left_image = fit_image(original_image)
+    right_image = fit_image(preprocessed_image)
+
+    canvas_width = left_image.width + right_image.width + (gap * 3)
+    canvas_height = header_height + target_height + 24
+    canvas = Image.new('RGB', (canvas_width, canvas_height), 'white')
+    draw = ImageDraw.Draw(canvas)
+
+    try:
+        font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
+        small_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 14)
+    except Exception:
+        font = ImageFont.load_default()
+        small_font = ImageFont.load_default()
+
+    left_x = gap
+    right_x = left_x + left_image.width + gap
+    image_y = header_height
+
+    draw.rounded_rectangle((left_x - 6, image_y - 6, left_x + left_image.width + 6, image_y + target_height + 6), radius=12, outline='#b9b9b9', width=2)
+    draw.rounded_rectangle((right_x - 6, image_y - 6, right_x + right_image.width + 6, image_y + target_height + 6), radius=12, outline='#b9b9b9', width=2)
+
+    draw.text((left_x, 14), 'Original', fill='#222222', font=font)
+    draw.text((right_x, 14), 'Preprocessed preview', fill='#222222', font=font)
+    draw.text((left_x, 38), f'Coverage: {original_coverage:.2f}%', fill='#555555', font=small_font)
+    draw.text((right_x, 38), f'Coverage: {preprocessed_coverage:.2f}%', fill='#555555', font=small_font)
+
+    canvas.paste(left_image, (left_x, image_y))
+    canvas.paste(right_image, (right_x, image_y))
+
+    return canvas, original_coverage, preprocessed_coverage
+
+
+def _capture_url_for_path(filepath, filename):
+    """Build the public URL for a capture file path."""
+    if not filepath:
+        return None
+
+    active_ssd_capture_dir = get_ssd_capture_directory() or SSD_CAPTURE_DIRECTORY
+    if os.path.abspath(filepath).startswith(os.path.abspath(active_ssd_capture_dir)):
+        return f"/captures/{filename}"
+
+    return f"/static/captures/{filename}"
 
 
 def _collect_capture_paths(start_dt, end_dt, preferred_dir=None):
@@ -578,9 +740,10 @@ def get_camera_history():
         # Extract timestamps and coverage percentages
         capture_data = []
         for capture in captures:
+            capture_path = resolve_capture_file_path(capture.filename)
             capture_data.append({
                 'time': capture.timestamp.strftime('%Y-%m-%d %H:%M'),
-                'analysis': capture.analysis_result or "0"
+                'analysis': _capture_analysis_value(capture, capture_path)
             })
         
         return jsonify({
@@ -591,6 +754,203 @@ def get_camera_history():
     except Exception as e:
         logger.error(f"Error fetching camera history: {e}")
         return jsonify({'error': 'Failed to fetch camera history'}), 500
+
+
+def _parse_analysis_value(raw_value):
+    if raw_value is None:
+        return 0.0
+
+    if isinstance(raw_value, (int, float)):
+        return float(raw_value)
+
+    text = str(raw_value).strip().replace('%', '')
+    if not text:
+        return 0.0
+
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+@app.route('/api/camera/history/compare', methods=['GET'])
+def compare_camera_history():
+    """Recalculate stored camera captures for a selected interval without mutating the database."""
+    try:
+        start_value = request.args.get('start')
+        end_value = request.args.get('end')
+        if not start_value or not end_value:
+            return jsonify({'error': 'Missing start or end datetime'}), 400
+
+        start_dt = _parse_client_datetime(start_value, 'start')
+        end_dt = _parse_client_datetime(end_value, 'end')
+        if start_dt > end_dt:
+            return jsonify({'error': 'Start time must be earlier than end time'}), 400
+
+        captures = CameraCapture.query.filter(
+            CameraCapture.timestamp >= start_dt,
+            CameraCapture.timestamp <= end_dt
+        ).order_by(CameraCapture.timestamp.asc()).all()
+        sample_hours = _parse_sampling_hours(request.args.get('sample_every_hours', 1))
+        sampled_captures = _sample_captures_by_interval(captures, sample_hours)
+
+        from core.vision import ImageAnalyzer
+
+        compare_data = []
+        original_values = []
+        recalculated_values = []
+        missing_files = 0
+        from PIL import Image
+
+        crop_params = _parse_crop_params_from_request()
+
+        # Track best (maximum) preprocessed coverage and its capture
+        best_preprocessed = None
+        best_preprocessed_capture = None
+        best_preprocessed_original = None
+
+        for capture in sampled_captures:
+            capture_path = resolve_capture_file_path(capture.filename)
+            original_analysis = _capture_analysis_value(capture, capture_path)
+            preview_analysis = None
+            delta = None
+
+            if capture_path:
+                with Image.open(capture_path) as source_image:
+                    original_image = source_image.convert('RGB').copy()
+
+                preprocessed_image = ImageAnalyzer.create_preprocessing_preview_image(original_image, crop_params=crop_params)
+                preview_analysis = ImageAnalyzer.calculate_mycelium_coverage_from_image(preprocessed_image)
+                delta = round(preview_analysis - original_analysis, 2)
+                original_values.append(original_analysis)
+                recalculated_values.append(preview_analysis)
+
+                # update best preprocessed capture
+                if preview_analysis is not None:
+                    if best_preprocessed is None or preview_analysis > best_preprocessed:
+                        best_preprocessed = preview_analysis
+                        best_preprocessed_capture = capture
+                        best_preprocessed_original = original_analysis
+            else:
+                missing_files += 1
+
+            compare_data.append({
+                'time': capture.timestamp.strftime('%Y-%m-%d %H:%M'),
+                'filename': capture.filename,
+                'original_analysis': round(original_analysis, 2),
+                'recalculated_analysis': preview_analysis,
+                'delta': delta,
+                'file_available': capture_path is not None
+            })
+
+        original_average = round(sum(original_values) / len(original_values), 2) if original_values else 0.0
+        recalculated_average = round(sum(recalculated_values) / len(recalculated_values), 2) if recalculated_values else 0.0
+
+        original_max = round(max(original_values), 2) if original_values else 0.0
+        recalculated_max = round(max(recalculated_values), 2) if recalculated_values else 0.0
+
+        max_capture_filename = best_preprocessed_capture.filename if best_preprocessed_capture else None
+        max_capture_time = best_preprocessed_capture.timestamp.isoformat() if best_preprocessed_capture else None
+        max_capture_original = round(best_preprocessed_original, 2) if best_preprocessed_original is not None else None
+        max_capture_preprocessed = round(best_preprocessed, 2) if best_preprocessed is not None else None
+
+        return jsonify({
+            'captures': compare_data,
+            'start': start_dt.isoformat(),
+            'end': end_dt.isoformat(),
+            'count': len(compare_data),
+            'sample_every_hours': sample_hours,
+            'sampled_count': len(sampled_captures),
+            'recalculated_count': len(recalculated_values),
+            'missing_files': missing_files,
+            'summary': {
+                'original_average': original_average,
+                'recalculated_average': recalculated_average,
+                'average_delta': round(recalculated_average - original_average, 2),
+                'original_max': original_max,
+                'recalculated_max': recalculated_max,
+                'max_capture_filename': max_capture_filename,
+                'max_capture_time': max_capture_time,
+                'max_capture_original': max_capture_original,
+                'max_capture_preprocessed': max_capture_preprocessed,
+                'max_delta': round((max_capture_preprocessed - max_capture_original), 2) if (max_capture_preprocessed is not None and max_capture_original is not None) else None
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error comparing camera history: {e}")
+        return jsonify({'error': 'Failed to compare camera history'}), 500
+
+
+@app.route('/api/camera/history/preview-image', methods=['GET'])
+def preview_camera_history_image():
+    """Return a side-by-side original/preprocessed preview image for the selected interval."""
+    try:
+        start_value = request.args.get('start')
+        end_value = request.args.get('end')
+        if not start_value or not end_value:
+            return jsonify({'error': 'Missing start or end datetime'}), 400
+
+        start_dt = _parse_client_datetime(start_value, 'start')
+        end_dt = _parse_client_datetime(end_value, 'end')
+        if start_dt > end_dt:
+            return jsonify({'error': 'Start time must be earlier than end time'}), 400
+
+        capture = CameraCapture.query.filter(
+            CameraCapture.timestamp >= start_dt,
+            CameraCapture.timestamp <= end_dt
+        ).order_by(CameraCapture.timestamp.asc()).first()
+        sample_hours = _parse_sampling_hours(request.args.get('sample_every_hours', 1))
+
+        if capture:
+            all_captures = CameraCapture.query.filter(
+                CameraCapture.timestamp >= start_dt,
+                CameraCapture.timestamp <= end_dt
+            ).order_by(CameraCapture.timestamp.asc()).all()
+            sampled_captures = _sample_captures_by_interval(all_captures, sample_hours)
+
+            # Select the sampled capture that yields the maximum preprocessed coverage
+            from core.vision import ImageAnalyzer
+            best_val = None
+            best_capture = None
+            crop_params = _parse_crop_params_from_request()
+            for c in sampled_captures:
+                p = resolve_capture_file_path(c.filename)
+                if not p:
+                    continue
+                try:
+                    with Image.open(p) as src:
+                        orig = src.convert('RGB').copy()
+                    pre = ImageAnalyzer.create_preprocessing_preview_image(orig, crop_params=crop_params)
+                    val = ImageAnalyzer.calculate_mycelium_coverage_from_image(pre)
+                    if best_val is None or (val is not None and val > best_val):
+                        best_val = val
+                        best_capture = c
+                except Exception:
+                    continue
+
+            capture = best_capture if best_capture else (sampled_captures[0] if sampled_captures else None)
+
+        if not capture:
+            return jsonify({'error': 'No captures found in the selected interval'}), 404
+
+        capture_path = resolve_capture_file_path(capture.filename)
+        if not capture_path:
+            return jsonify({'error': 'Capture file not found'}), 404
+
+        crop_params = _parse_crop_params_from_request()
+        composite_image, original_coverage, preprocessed_coverage = _build_preprocessing_composite_image(capture_path, crop_params=crop_params)
+
+        return jsonify({
+            'filename': capture.filename,
+            'timestamp': capture.timestamp.isoformat(),
+            'original_coverage': original_coverage,
+            'preprocessed_coverage': preprocessed_coverage,
+            'sample_every_hours': sample_hours,
+            'image_data_url': _encode_pil_image_data_url(composite_image)
+        })
+    except Exception as e:
+        logger.error(f"Error building preview image: {e}")
+        return jsonify({'error': 'Failed to build preview image'}), 500
 
 
 @app.route('/api/camera/captures', methods=['GET'])
@@ -612,25 +972,40 @@ def get_camera_captures():
 
 @app.route('/api/camera/latest', methods=['GET'])
 def get_latest_capture():
-    """Get the latest camera capture from either SSD or SD card."""
+    """Get the latest camera capture, preferring the newest database record."""
     try:
+        capture = CameraCapture.query.order_by(CameraCapture.timestamp.desc()).first()
+
+        if capture:
+            capture_path = _resolve_capture_file_path(capture.filename)
+            if capture_path:
+                analysis = _capture_analysis_value(capture, capture_path)
+
+                return jsonify({
+                    'filename': capture.filename,
+                    'url': _capture_url_for_path(capture_path, capture.filename),
+                    'analysis': analysis,
+                    'timestamp': capture.timestamp.isoformat()
+                })
+
         filename, full_path, serve_path = get_latest_capture_path()
-        
+
         if not filename:
             return jsonify({'error': 'No captures available'}), 404
-        
-        # Construct the URL for the frontend
+
         url = f"{serve_path}/{filename}"
-        
-        # Try to get analysis from database for this filename
-        capture = CameraCapture.query.filter_by(filename=filename).first()
-        analysis = capture.analysis_result if capture else "0"
-        
+        analysis = 0.0
+        timestamp = None
+
+        if full_path:
+            from core.vision import ImageAnalyzer
+            analysis = ImageAnalyzer.calculate_mycelium_coverage(full_path)
+
         return jsonify({
             'filename': filename,
             'url': url,
             'analysis': analysis,
-            'timestamp': capture.timestamp.isoformat() if capture else None
+            'timestamp': timestamp
         })
     except Exception as e:
         logger.error(f"Error fetching latest capture: {e}")
@@ -983,8 +1358,9 @@ def capture_now():
         if not light_was_on:
             relay_driver.set_state(3, True)
 
-        if lead_seconds > 0:
-            time.sleep(lead_seconds)
+        wait_seconds = max(lead_seconds, CAMERA_FOCUS_TIME_S)
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
 
         try:
             image_path = camera.capture_image()

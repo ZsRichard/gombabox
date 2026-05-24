@@ -168,17 +168,11 @@
                                         <label for="timelapse-end-date" class="form-label">End time</label>
                                         <input type="datetime-local" class="form-control" id="timelapse-end-date">
                                     </div>
-                                    <div class="col-md-2">
+                                    <div class="col-md-3">
                                         <label for="timelapse-fps" class="form-label">FPS</label>
                                         <input type="number" min="1" max="60" step="1" value="15" class="form-control" id="timelapse-fps">
                                     </div>
-                                    <div class="col-md-3">
-                                        <label for="timelapse-capture-dir" class="form-label">Capture folder (optional)</label>
-                                        <input type="text" class="form-control" id="timelapse-capture-dir" placeholder="/media/richard/GOMBABOX/Gombabox_captures">
-                                    </div>
-                                </div>
-                                <div class="row g-3 mt-1 align-items-end">
-                                    <div class="col-md-2 ms-auto">
+                                    <div class="col-md-3 d-flex">
                                         <button class="btn btn-primary w-100" id="generate-timelapse-btn" onclick="generateTimelapse()">
                                             <i class="fas fa-wand-magic-sparkles"></i> Build
                                         </button>
@@ -218,9 +212,6 @@
                                     <input type="radio" class="btn-check" name="time-range" id="time-30d" value="720">
                                     <label class="btn btn-outline-primary" for="time-30d">30 Days</label>
                                 </div>
-                                <div class="mt-2">
-                                    <small class="text-muted" id="chart-data-info">Loading...</small>
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -236,6 +227,83 @@
                             <div class="card-body">
                                 <div class="chart-container">
                                     <canvas id="coverage-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Coverage Test Lab -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-flask"></i> Coverage Test Lab
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3 align-items-end">
+                                    <div class="col-md-3">
+                                        <label for="coverage-preview-start" class="form-label">Preview start</label>
+                                        <input type="datetime-local" id="coverage-preview-start" class="form-control">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="coverage-preview-end" class="form-label">Preview end</label>
+                                        <input type="datetime-local" id="coverage-preview-end" class="form-control">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="coverage-preview-sample-hours" class="form-label">Sample every</label>
+                                        <input type="number" id="coverage-preview-sample-hours" class="form-control" min="1" step="1" value="1">
+                                    </div>
+                                    <div class="col-md-12 mt-3">
+                                        <div class="row g-2">
+                                            <div class="col-md-3">
+                                                <label for="coverage-crop-top" class="form-label">Crop top (%)</label>
+                                                <input type="range" id="coverage-crop-top" min="0" max="40" step="1" value="20" class="form-range">
+                                                <small class="form-text text-muted"><span id="coverage-crop-top-val">20</span>%</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label for="coverage-crop-left" class="form-label">Crop left (%)</label>
+                                                <input type="range" id="coverage-crop-left" min="0" max="40" step="1" value="20" class="form-range">
+                                                <small class="form-text text-muted"><span id="coverage-crop-left-val">20</span>%</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label for="coverage-crop-right" class="form-label">Crop right (%)</label>
+                                                <input type="range" id="coverage-crop-right" min="0" max="40" step="1" value="14" class="form-range">
+                                                <small class="form-text text-muted"><span id="coverage-crop-right-val">14</span>%</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label for="coverage-crop-bottom" class="form-label">Crop bottom (%)</label>
+                                                <input type="range" id="coverage-crop-bottom" min="0" max="40" step="1" value="9" class="form-range">
+                                                <small class="form-text text-muted"><span id="coverage-crop-bottom-val">9</span>%</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3 d-flex gap-2">
+                                        <button class="btn btn-outline-secondary flex-fill" type="button" onclick="useCoveragePreviewPreset(1)">1H</button>
+                                        <button class="btn btn-outline-secondary flex-fill" type="button" onclick="useCoveragePreviewPreset(6)">6H</button>
+                                        <button class="btn btn-outline-secondary flex-fill" type="button" onclick="useCoveragePreviewPreset(24)">24H</button>
+                                    </div>
+                                    <div class="col-md-3 d-flex">
+                                        <button class="btn btn-outline-primary w-100" id="coverage-preview-btn" onclick="loadCoverageComparison()">
+                                            <i class="fas fa-rotate"></i> Recalculate preview
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="mt-2">
+                                    <small class="text-muted" id="chart-data-info">Select an interval to test the recalculation.</small>
+                                </div>
+                                <div class="mt-2">
+                                    <small class="text-muted">Higher values sample fewer images and speed up long intervals.</small>
+                                </div>
+                                <div class="chart-container mt-3">
+                                    <canvas id="coverage-test-chart"></canvas>
+                                </div>
+                                <div class="mt-4">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <strong>Original vs Preprocessed Image</strong>
+                                        <small class="text-muted" id="coverage-preview-image-meta">Waiting for preview...</small>
+                                    </div>
+                                    <img id="coverage-preview-image" class="img-fluid rounded border w-100" src="/static/icons/icon.svg" alt="Coverage preprocessing preview">
                                 </div>
                             </div>
                         </div>

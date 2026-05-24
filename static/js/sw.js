@@ -40,6 +40,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Network-first for API and captures (prefer live), with offline fallback
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/captures/')) {
     event.respondWith(
       fetch(event.request).catch(() => {
@@ -51,18 +52,28 @@ self.addEventListener('fetch', (event) => {
           });
         }
 
-        return caches.match('/static/icons/icon.svg').then((cachedIcon) => {
-          if (cachedIcon) {
-            return cachedIcon;
-          }
-
-          return fetch('/static/icons/icon.svg');
-        });
+        return caches.match('/static/icons/icon.svg').then((cachedIcon) => cachedIcon || fetch('/static/icons/icon.svg'));
       })
     );
     return;
   }
 
+  // For the main HTML and the dashboard JS prefer network-first so users get the latest UI
+  const networkFirstPaths = ['/', '/index.html', '/static/js/dashboard.js'];
+  if (networkFirstPaths.includes(url.pathname)) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const cloned = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, cloned));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Default: cache-first for other static assets
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) {

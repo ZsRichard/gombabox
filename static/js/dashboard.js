@@ -13,9 +13,11 @@ let humidityChart = null;
 let co2Chart = null;
 let lightChart = null;
 let coverageChart = null;
+let coverageTestChart = null;
 let dataRefreshTimer = null;
 let logsRefreshTimer = null;
 let deferredInstallPrompt = null;
+let coveragePreviewDebounceTimer = null;
 
 // Current time range setting (in hours)
 let currentTimeRange = 1;
@@ -27,7 +29,8 @@ let sensorHistory = {
     hum: [],
     co2: [],
     light: [],
-    coverage: []
+    coverage: [],
+    coveragePreview: []
 };
 
 const SETTINGS_SCHEMA = [
@@ -66,6 +69,8 @@ document.addEventListener('DOMContentLoaded', function() {
     loadGrowthPhase();
     initializeDatabaseTab();
     initializeMediaExportDates();
+    initializeCoveragePreviewInterval();
+    initializeCoveragePreviewControls();
     updateNetworkStatusUI();
     initializePwaSupport();
 });
@@ -73,7 +78,6 @@ document.addEventListener('DOMContentLoaded', function() {
 function initializeMediaExportDates() {
     const startInput = document.getElementById('timelapse-start-date');
     const endInput = document.getElementById('timelapse-end-date');
-    const captureDirInput = document.getElementById('timelapse-capture-dir');
     if (!startInput || !endInput) {
         return;
     }
@@ -86,14 +90,34 @@ function initializeMediaExportDates() {
 
     startInput.value = toDateTimeLocalInputValue(start);
     endInput.value = toDateTimeLocalInputValue(now);
+}
 
-    if (captureDirInput) {
-        const savedCaptureDir = localStorage.getItem('gombabox_timelapse_capture_dir') || '';
-        captureDirInput.value = savedCaptureDir;
-        captureDirInput.addEventListener('change', () => {
-            localStorage.setItem('gombabox_timelapse_capture_dir', captureDirInput.value.trim());
-        });
+function initializeCoveragePreviewInterval() {
+    setCoveragePreviewIntervalFromHours(currentTimeRange);
+}
+
+function initializeCoveragePreviewControls() {
+}
+
+function useCoveragePreviewPreset(hours) {
+    setCoveragePreviewIntervalFromHours(hours);
+}
+
+function setCoveragePreviewIntervalFromHours(hours) {
+    const startInput = document.getElementById('coverage-preview-start');
+    const endInput = document.getElementById('coverage-preview-end');
+    if (!startInput || !endInput) {
+        return;
     }
+
+    const now = new Date();
+    const start = new Date(now);
+    start.setHours(start.getHours() - Math.max(1, Number(hours) || 1));
+    start.setSeconds(0, 0);
+    now.setSeconds(0, 0);
+
+    startInput.value = toDateTimeLocalInputValue(start);
+    endInput.value = toDateTimeLocalInputValue(now);
 }
 
 function toDateTimeLocalInputValue(dateObj) {
@@ -139,7 +163,6 @@ async function postJson(path, payload) {
 function buildDateRangePayload() {
     const startInput = document.getElementById('timelapse-start-date');
     const endInput = document.getElementById('timelapse-end-date');
-    const captureDirInput = document.getElementById('timelapse-capture-dir');
     if (!startInput || !endInput) {
         throw new Error('Date fields are not available on this page.');
     }
@@ -162,10 +185,6 @@ function buildDateRangePayload() {
     }
 
     const payload = { start, end };
-    const captureDir = captureDirInput ? captureDirInput.value.trim() : '';
-    if (captureDir) {
-        payload.capture_dir = captureDir;
-    }
 
     return payload;
 }
@@ -598,7 +617,8 @@ function sortSensorHistoryByTimestamp() {
         hum: indices.map(i => sensorHistory.hum[i]),
         co2: indices.map(i => sensorHistory.co2[i]),
         light: indices.map(i => sensorHistory.light[i]),
-        coverage: indices.map(i => sensorHistory.coverage[i])
+        coverage: indices.map(i => sensorHistory.coverage[i]),
+        coveragePreview: indices.map(i => sensorHistory.coveragePreview[i])
     };
     
     // Replace with sorted data
@@ -614,6 +634,7 @@ function setupTimeRangeSelector() {
         button.addEventListener('change', function(e) {
             currentTimeRange = parseInt(this.value);
             console.log('Time range changed to:', currentTimeRange, 'hours');
+            setCoveragePreviewIntervalFromHours(currentTimeRange);
             loadHistoricalData();
         });
     });
@@ -642,7 +663,8 @@ function loadHistoricalData() {
             hum: [],
             co2: [],
             light: [],
-            coverage: []
+            coverage: [],
+            coveragePreview: []
         };
 
         // Process measurements from the API
@@ -681,6 +703,9 @@ function loadHistoricalData() {
             while (sensorHistory.coverage.length < sensorHistory.timestamps.length) {
                 sensorHistory.coverage.push(null);
             }
+            while (sensorHistory.coveragePreview.length < sensorHistory.timestamps.length) {
+                sensorHistory.coveragePreview.push(null);
+            }
         }
 
         // Sort all data by timestamp to fix chronological order
@@ -690,6 +715,7 @@ function loadHistoricalData() {
         console.log(`Loaded ${sensorHistory.timestamps.length} measurements and ${cameraData.captures ? cameraData.captures.length : 0} camera captures for ${measureData.hours} hours`);
         updateChartDataInfo(`${sensorHistory.timestamps.length} data points loaded (${measureData.hours} hour${measureData.hours !== 1 ? 's' : ''})`);
         updateCharts();
+        loadCoverageComparison();
     })
     .catch(error => {
         console.error('Fetch error:', error);
@@ -852,6 +878,44 @@ function initializeCharts() {
                     borderColor: '#9b59b6',
                     backgroundColor: 'rgba(155, 89, 182, 0.1)',
                     fill: true,
+                    tension: 0.4,
+                    spanGaps: true
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        title: { display: true, text: 'Coverage (%)' }
+                    }
+                }
+            }
+        });
+    }
+
+    const coverageTestCtx = document.getElementById('coverage-test-chart');
+    if (coverageTestCtx) {
+        coverageTestChart = new Chart(coverageTestCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Original Coverage (%)',
+                    data: [],
+                    borderColor: '#9b59b6',
+                    backgroundColor: 'rgba(155, 89, 182, 0.1)',
+                    fill: false,
+                    tension: 0.4,
+                    spanGaps: true
+                }, {
+                    label: 'Recalculated Coverage (%)',
+                    data: [],
+                    borderColor: '#f39c12',
+                    backgroundColor: 'rgba(243, 156, 18, 0.08)',
+                    borderDash: [8, 4],
+                    fill: false,
                     tension: 0.4,
                     spanGaps: true
                 }]
@@ -1464,6 +1528,110 @@ function updateCharts() {
         coverageChart.data.datasets[0].data = sensorHistory.coverage;
         coverageChart.update('none');
     }
+}
+
+function loadCoverageComparison() {
+    const startInput = document.getElementById('coverage-preview-start');
+    const endInput = document.getElementById('coverage-preview-end');
+    const sampleInput = document.getElementById('coverage-preview-sample-hours');
+    const topSlider = document.getElementById('coverage-crop-top');
+    const leftSlider = document.getElementById('coverage-crop-left');
+    const rightSlider = document.getElementById('coverage-crop-right');
+    const bottomSlider = document.getElementById('coverage-crop-bottom');
+
+    // Update displayed values but do not auto-trigger recalculation
+    const updateSliderLabel = (slider, labelId) => {
+        const el = document.getElementById(labelId);
+        if (el && slider) el.textContent = slider.value;
+    };
+
+    if (topSlider) topSlider.addEventListener('input', () => updateSliderLabel(topSlider, 'coverage-crop-top-val'));
+    if (leftSlider) leftSlider.addEventListener('input', () => updateSliderLabel(leftSlider, 'coverage-crop-left-val'));
+    if (rightSlider) rightSlider.addEventListener('input', () => updateSliderLabel(rightSlider, 'coverage-crop-right-val'));
+    if (bottomSlider) bottomSlider.addEventListener('input', () => updateSliderLabel(bottomSlider, 'coverage-crop-bottom-val'));
+
+    // initialize displayed values
+    if (topSlider) updateSliderLabel(topSlider, 'coverage-crop-top-val');
+    if (leftSlider) updateSliderLabel(leftSlider, 'coverage-crop-left-val');
+    if (rightSlider) updateSliderLabel(rightSlider, 'coverage-crop-right-val');
+    if (bottomSlider) updateSliderLabel(bottomSlider, 'coverage-crop-bottom-val');
+    const startValue = startInput ? startInput.value : '';
+    const endValue = endInput ? endInput.value : '';
+    const sampleEveryHours = sampleInput ? Math.max(1, Number(sampleInput.value) || 1) : 1;
+    const topCrop = document.getElementById('coverage-crop-top') ? Number(document.getElementById('coverage-crop-top').value) : 20;
+    const leftCrop = document.getElementById('coverage-crop-left') ? Number(document.getElementById('coverage-crop-left').value) : 20;
+    const rightCrop = document.getElementById('coverage-crop-right') ? Number(document.getElementById('coverage-crop-right').value) : 14;
+    const bottomCrop = document.getElementById('coverage-crop-bottom') ? Number(document.getElementById('coverage-crop-bottom').value) : 9;
+
+    if (!startValue || !endValue) {
+        updateChartDataInfo('Please choose both preview start and end times.');
+        return;
+    }
+
+    const previewButton = document.getElementById('coverage-preview-btn');
+    if (previewButton) {
+        previewButton.disabled = true;
+        previewButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Recalculating...';
+    }
+
+    Promise.all([
+        fetch(`${API_BASE}/camera/history/compare?start=${encodeURIComponent(startValue)}&end=${encodeURIComponent(endValue)}&sample_every_hours=${encodeURIComponent(sampleEveryHours)}&crop_top=${encodeURIComponent(topCrop)}&crop_left=${encodeURIComponent(leftCrop)}&crop_right=${encodeURIComponent(rightCrop)}&crop_bottom=${encodeURIComponent(bottomCrop)}`).then(response => response.json()),
+        fetch(`${API_BASE}/camera/history/preview-image?start=${encodeURIComponent(startValue)}&end=${encodeURIComponent(endValue)}&sample_every_hours=${encodeURIComponent(sampleEveryHours)}&crop_top=${encodeURIComponent(topCrop)}&crop_left=${encodeURIComponent(leftCrop)}&crop_right=${encodeURIComponent(rightCrop)}&crop_bottom=${encodeURIComponent(bottomCrop)}`).then(response => response.json())
+    ])
+        .then(([data, previewImageData]) => {
+            if (data.error) {
+                updateChartDataInfo(`Preview failed: ${data.error}`);
+                return;
+            }
+
+            const captures = Array.isArray(data.captures) ? data.captures : [];
+            const labels = captures.map(capture => capture.time);
+            const originalCoverage = captures.map(capture => {
+                const value = Number(capture.original_analysis);
+                return Number.isFinite(value) ? value : null;
+            });
+            const recalculatedCoverage = captures.map(capture => {
+                const value = Number(capture.recalculated_analysis);
+                return Number.isFinite(value) ? value : null;
+            });
+
+            if (coverageTestChart) {
+                coverageTestChart.data.labels = labels;
+                coverageTestChart.data.datasets[0].data = originalCoverage;
+                coverageTestChart.data.datasets[1].data = recalculatedCoverage;
+                coverageTestChart.update('none');
+            }
+
+            const previewImageEl = document.getElementById('coverage-preview-image');
+            const previewMetaEl = document.getElementById('coverage-preview-image-meta');
+            if (previewImageEl && previewImageData && previewImageData.image_data_url) {
+                previewImageEl.src = previewImageData.image_data_url;
+                if (previewMetaEl) {
+                    previewMetaEl.textContent = `${previewImageData.filename || 'Preview'} · ${Number(previewImageData.original_coverage || 0).toFixed(2)}% -> ${Number(previewImageData.preprocessed_coverage || 0).toFixed(2)}%`;
+                }
+            } else if (previewMetaEl) {
+                previewMetaEl.textContent = 'No preview image available for this interval.';
+            }
+
+            const summary = data.summary || {};
+            const originalMax = Number(summary.original_max || summary.original_average || 0).toFixed(2);
+            const recalculatedMax = Number(summary.recalculated_max || summary.recalculated_average || 0).toFixed(2);
+            const maxFilename = summary.max_capture_filename || '';
+            const maxTime = summary.max_capture_time || '';
+            updateChartDataInfo(
+                `Preview loaded for ${data.recalculated_count || 0} sampled captures between ${startValue} and ${endValue} (${sampleEveryHours}h sampling). Max: ${originalMax}% -> ${recalculatedMax}% ${maxFilename ? ` (file: ${maxFilename})` : ''}`
+            );
+        })
+        .catch(error => {
+            console.error('Preview fetch error:', error);
+            updateChartDataInfo('Failed to load coverage preview');
+        })
+        .finally(() => {
+            if (previewButton) {
+                previewButton.disabled = false;
+                previewButton.innerHTML = '<i class="fas fa-rotate"></i> Recalculate preview';
+            }
+        });
 }
 
 /**

@@ -148,5 +148,25 @@ def get_latest_capture_path() -> tuple:
     
     return (None, None, None)
 
+def resolve_capture_file_path(filename: str) -> str | None:
+    """Resolve a stored capture filename to an absolute file path if it exists."""
+    if not filename:
+        return None
+
+    candidate_directories = []
+
+    ssd_capture_dir = get_ssd_capture_directory()
+    if ssd_capture_dir:
+        candidate_directories.append(ssd_capture_dir)
+
+    candidate_directories.append(SD_CAPTURE_DIRECTORY)
+
+    for directory in candidate_directories:
+        file_path = os.path.join(directory, filename)
+        if os.path.exists(file_path):
+            return file_path
+
+    return None
+
 # Legacy constant for backward compatibility
 CAPTURE_DIRECTORY = get_capture_directory()
