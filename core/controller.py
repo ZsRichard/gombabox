@@ -187,6 +187,9 @@ class MushroomController:
         """Control lighting based on timer."""
         start_hour = int(Config.get('light_on_hour'))
         end_hour = int(Config.get('light_off_hour'))
+
+        if getattr(self.relays, "camera_capture_active", False):
+            return
         
         now = datetime.datetime.now()
         current_hour = now.hour
