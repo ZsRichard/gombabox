@@ -1378,9 +1378,8 @@ def capture_now():
         if not light_was_on:
             relay_driver.set_state(3, True)
 
-        wait_seconds = max(lead_seconds, CAMERA_FOCUS_TIME_S)
-        if wait_seconds > 0:
-            time.sleep(wait_seconds)
+        if lead_seconds > 0:
+            time.sleep(lead_seconds)
 
         try:
             image_path = camera.capture_image()

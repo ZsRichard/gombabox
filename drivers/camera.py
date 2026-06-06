@@ -71,9 +71,12 @@ class RealCameraDriver(CameraDriver):
             # --denoise cdn_fast: fast denoising to reduce edge artifacts
             cmd = [
                 'rpicam-still',
+                '--nopreview',
                 '-o', filepath,
                 '--width', '4608',                    # Native sensor resolution - full width, no crop
                 '--height', '2592',                   # Native sensor resolution
+                '--metering', 'average',              # Favor the overall lit grow bed over a tiny center spot
+                '--ev', '0',                       # Pull exposure down to reduce washout and smear
                 '--autofocus-mode', 'continuous',     # Continuous auto-focus for macro
                 '--autofocus-range', 'macro',         # Optimize for 25-30cm macro distance
                 '--autofocus-on-capture',             # Trigger AF scan at capture time

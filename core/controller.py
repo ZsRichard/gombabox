@@ -287,7 +287,7 @@ class MushroomController:
         
         Ensures proper LED synchronization with camera focus time:
         - LED turns on to stabilize exposure
-        - Waits for the longer of lead time or focus time
+        - Camera capture stays active for the focus window
         - Returns previous light state for restoration after capture
         """
         lead_seconds = Config.get('camera_light_lead_seconds')
@@ -305,11 +305,10 @@ class MushroomController:
             self.relays.set_state(RELAY_ID_LIGHT, True)
             self._log_system_event("INFO", "Camera light ON for capture")
 
-        # Ensure we wait long enough for both LED stabilization and camera auto-focus
-        total_wait_seconds = max(lead_seconds, CAMERA_FOCUS_TIME_S)
-        if total_wait_seconds > 0:
-            self._log_system_event("INFO", f"Waiting {total_wait_seconds:.1f}s for LED stabilization and camera focus")
-            time.sleep(total_wait_seconds)
+        if lead_seconds > 0:
+            # Optional extra warm-up for unusual lighting setups.
+            self._log_system_event("INFO", f"Waiting {lead_seconds:.1f}s for LED stabilization")
+            time.sleep(lead_seconds)
 
         return was_on
 

@@ -52,6 +52,34 @@ class RealSensorDriver(SensorDriver):
             logger.warning(f"Serial error: {e}")
             self.ser = None
 
+        self._disable_mhz19_abc()
+
+    def _build_mhz19_command(self, command_code, payload=None):
+        """Build a 9-byte MH-Z19 frame with checksum."""
+        payload = list(payload or [])
+        if len(payload) > 5:
+            raise ValueError("MH-Z19 payload must contain at most 5 bytes")
+
+        frame = [0xFF, 0x01, command_code] + payload
+        frame.extend([0x00] * (8 - len(frame)))
+        checksum = (0xFF - (sum(frame) & 0xFF) + 1) & 0xFF
+        frame.append(checksum)
+        return bytes(frame)
+
+    def _disable_mhz19_abc(self):
+        """Disable MH-Z19 automatic baseline correction at startup."""
+        if not self.ser:
+            return
+
+        try:
+            # MH-Z19 ABC on/off command: 0x79 with zero payload disables ABC.
+            command = self._build_mhz19_command(0x79, [0x00, 0x00, 0x00, 0x00, 0x00])
+            self.ser.write(command)
+            self.ser.flush()
+            logger.info("MH-Z19C ABC disabled at startup.")
+        except Exception as e:
+            logger.warning(f"Failed to disable MH-Z19C ABC: {e}")
+
     def _read_mhz19(self):
         """MH-Z19C CO2 reading with raw bytes."""
         if not self.ser: return 0

@@ -1,6 +1,23 @@
+import os
+import sys
 import time
 import logging
-import sys
+
+
+def _ensure_venv():
+    """Re-exec into the local venv Python if available and not already active."""
+    if os.environ.get("GOMBABOX_SKIP_VENV") == "1":
+        return
+    if sys.prefix != sys.base_prefix:
+        return
+
+    venv_python = os.path.join(os.path.dirname(__file__), "venv", "bin", "python3")
+    if os.path.isfile(venv_python):
+        os.environ["GOMBABOX_SKIP_VENV"] = "1"
+        os.execv(venv_python, [venv_python] + sys.argv)
+
+
+_ensure_venv()
 
 # Configure logging so we can see the output
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
