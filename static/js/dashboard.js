@@ -21,6 +21,48 @@ let coveragePreviewDebounceTimer = null;
 
 // Current time range setting (in hours)
 let currentTimeRange = 1;
+let currentCustomRange = null;
+let phasePeriods = [];
+
+const GROWTH_PHASE_COLORS = {
+    colonization: 'rgba(46, 204, 113, 0.12)',
+    fruiting: 'rgba(243, 156, 18, 0.12)'
+};
+
+const growthPhaseBackgroundPlugin = {
+    id: 'growthPhaseBackground',
+    beforeDatasetsDraw(chart) {
+        if (chart.canvas.id === 'coverage-test-chart' || phasePeriods.length === 0) return;
+        const labels = chart.data.labels || [];
+        if (labels.length < 2) return;
+
+        const firstTime = parseDashboardDate(labels[0]).getTime();
+        const lastTime = parseDashboardDate(labels[labels.length - 1]).getTime();
+        if (!Number.isFinite(firstTime) || !Number.isFinite(lastTime) || lastTime <= firstTime) return;
+
+        const { ctx, chartArea } = chart;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(chartArea.left, chartArea.top, chartArea.right - chartArea.left, chartArea.bottom - chartArea.top);
+        ctx.clip();
+
+        phasePeriods.forEach(period => {
+            const periodStart = parseDashboardDate(period.start).getTime();
+            const periodEnd = period.end ? parseDashboardDate(period.end).getTime() : lastTime;
+            const visibleStart = Math.max(firstTime, periodStart);
+            const visibleEnd = Math.min(lastTime, periodEnd);
+            if (visibleEnd <= visibleStart) return;
+
+            const startRatio = (visibleStart - firstTime) / (lastTime - firstTime);
+            const endRatio = (visibleEnd - firstTime) / (lastTime - firstTime);
+            const left = chartArea.left + startRatio * (chartArea.right - chartArea.left);
+            const right = chartArea.left + endRatio * (chartArea.right - chartArea.left);
+            ctx.fillStyle = GROWTH_PHASE_COLORS[period.phase] || 'rgba(127, 140, 141, 0.10)';
+            ctx.fillRect(left, chartArea.top, right - left, chartArea.bottom - chartArea.top);
+        });
+        ctx.restore();
+    }
+};
 
 // Data storage
 let sensorHistory = {
@@ -60,6 +102,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Set up time range selector listeners
     setupTimeRangeSelector();
+    initializeCustomChartRange();
     
     initializeCharts();
     loadInitialData();
@@ -67,6 +110,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadControls();
     loadSettings();
     loadGrowthPhase();
+    loadPhasePeriods();
     initializeDatabaseTab();
     initializeMediaExportDates();
     initializeCoveragePreviewInterval();
@@ -127,6 +171,46 @@ function toDateTimeLocalInputValue(dateObj) {
     const hours = String(dateObj.getHours()).padStart(2, '0');
     const minutes = String(dateObj.getMinutes()).padStart(2, '0');
     return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function parseDashboardDate(value) {
+    if (value instanceof Date) return value;
+    return new Date(String(value).replace(' ', 'T'));
+}
+
+function initializeCustomChartRange() {
+    const applyButton = document.getElementById('apply-chart-range');
+    setCustomChartIntervalFromHours(24);
+    if (applyButton) applyButton.addEventListener('click', applyCustomChartRange);
+}
+
+function setCustomChartIntervalFromHours(hours) {
+    const startInput = document.getElementById('chart-start-date');
+    const endInput = document.getElementById('chart-end-date');
+    if (!startInput || !endInput) return;
+    const end = new Date();
+    const start = new Date(end);
+    start.setHours(start.getHours() - Math.max(1, Number(hours) || 24));
+    start.setSeconds(0, 0);
+    end.setSeconds(0, 0);
+    startInput.value = toDateTimeLocalInputValue(start);
+    endInput.value = toDateTimeLocalInputValue(end);
+}
+
+function applyCustomChartRange() {
+    const start = document.getElementById('chart-start-date')?.value;
+    const end = document.getElementById('chart-end-date')?.value;
+    if (!start || !end || parseDashboardDate(end) <= parseDashboardDate(start)) {
+        updateHistoryDataInfo('Please select a valid custom start and end time.');
+        return;
+    }
+    currentTimeRange = null;
+    currentCustomRange = { start, end };
+    const previewStart = document.getElementById('coverage-preview-start');
+    const previewEnd = document.getElementById('coverage-preview-end');
+    if (previewStart) previewStart.value = start;
+    if (previewEnd) previewEnd.value = end;
+    loadHistoricalData();
 }
 
 async function parseApiResponse(response) {
@@ -632,7 +716,15 @@ function setupTimeRangeSelector() {
     const timeRangeButtons = document.querySelectorAll('input[name="time-range"]');
     timeRangeButtons.forEach(button => {
         button.addEventListener('change', function(e) {
-            currentTimeRange = parseInt(this.value);
+            const customControls = document.getElementById('custom-chart-range');
+            if (this.value === 'custom') {
+                if (customControls) customControls.classList.remove('d-none');
+                setCustomChartIntervalFromHours(currentTimeRange || 24);
+                return;
+            }
+            if (customControls) customControls.classList.add('d-none');
+            currentTimeRange = parseInt(this.value, 10);
+            currentCustomRange = null;
             console.log('Time range changed to:', currentTimeRange, 'hours');
             setCoveragePreviewIntervalFromHours(currentTimeRange);
             loadHistoricalData();
@@ -644,15 +736,23 @@ function setupTimeRangeSelector() {
  * Load historical sensor data for the selected time range
  */
 function loadHistoricalData() {
+    const rangeParams = new URLSearchParams();
+    if (currentCustomRange) {
+        rangeParams.set('start', currentCustomRange.start);
+        rangeParams.set('end', currentCustomRange.end);
+    } else {
+        rangeParams.set('hours', currentTimeRange);
+    }
+
     // Fetch both measurements and camera captures
     Promise.all([
-        fetch(`${API_BASE}/measurements/history?hours=${currentTimeRange}`).then(r => r.json()),
-        fetch(`${API_BASE}/camera/history?hours=${currentTimeRange}`).then(r => r.json())
+        fetch(`${API_BASE}/measurements/history?${rangeParams}`).then(parseApiResponse),
+        fetch(`${API_BASE}/camera/history?${rangeParams}`).then(parseApiResponse)
     ])
     .then(([measureData, cameraData]) => {
         if (measureData.error) {
             console.error('Error fetching measurements:', measureData.error);
-            updateChartDataInfo(`Error loading data: ${measureData.error}`);
+            updateHistoryDataInfo(`Error loading data: ${measureData.error}`);
             return;
         }
 
@@ -712,16 +812,29 @@ function loadHistoricalData() {
         // This is necessary because camera captures may have been appended out of order
         sortSensorHistoryByTimestamp();
 
-        console.log(`Loaded ${sensorHistory.timestamps.length} measurements and ${cameraData.captures ? cameraData.captures.length : 0} camera captures for ${measureData.hours} hours`);
-        updateChartDataInfo(`${sensorHistory.timestamps.length} data points loaded (${measureData.hours} hour${measureData.hours !== 1 ? 's' : ''})`);
+        const sampledNote = measureData.count > measureData.returned_count
+            ? `; ${measureData.returned_count} evenly sampled for display`
+            : '';
+        const rangeLabel = measureData.mode === 'custom'
+            ? `${formatPhaseDate(measureData.start)} – ${formatPhaseDate(measureData.end)}`
+            : `${measureData.hours} hour${measureData.hours !== 1 ? 's' : ''}`;
+        console.log(`Loaded ${sensorHistory.timestamps.length} chart points for ${rangeLabel}`);
+        updateHistoryDataInfo(`${measureData.count} measurements, ${cameraData.count || 0} captures (${rangeLabel}${sampledNote})`);
         updateCharts();
+        renderPhaseHelp();
         loadCoverageComparison();
     })
     .catch(error => {
         console.error('Fetch error:', error);
-        updateChartDataInfo('Failed to load data');
+        updateHistoryDataInfo('Failed to load data');
     });
 }
+
+function updateHistoryDataInfo(message) {
+    const infoEl = document.getElementById('chart-range-info');
+    if (infoEl) infoEl.textContent = message;
+}
+
 function updateChartDataInfo(message) {
     const infoEl = document.getElementById('chart-data-info');
     if (infoEl) {
@@ -733,6 +846,7 @@ function updateChartDataInfo(message) {
  * Initialize all Chart.js instances
  */
 function initializeCharts() {
+    Chart.register(growthPhaseBackgroundPlugin);
     const chartOptions = {
         responsive: true,
         maintainAspectRatio: false,
@@ -1166,6 +1280,92 @@ function loadGrowthPhase() {
         .catch(error => console.error('Phase error:', error));
 }
 
+function formatPhaseDate(value) {
+    if (!value) return 'ongoing';
+    const date = parseDashboardDate(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString([], {
+        year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit'
+    });
+}
+
+function phaseDisplayName(phase) {
+    return phase === 'colonization' ? 'Incubation' : 'Fruiting';
+}
+
+function loadPhasePeriods() {
+    fetch(`${API_BASE}/phase-periods`)
+        .then(parseApiResponse)
+        .then(data => {
+            phasePeriods = data.periods || [];
+            renderPhasePeriodList();
+            renderPhaseHelp();
+            updateCharts();
+        })
+        .catch(error => console.error('Phase period error:', error));
+}
+
+function renderPhaseHelp() {
+    const summary = document.getElementById('chart-phase-summary');
+    if (!summary) return;
+    if (phasePeriods.length === 0) {
+        summary.textContent = 'No phase periods recorded yet. Add them under Controls → Growth Phase.';
+        return;
+    }
+    summary.innerHTML = phasePeriods.map(period =>
+        `<span class="d-inline-block me-3">${escapeHtml(phaseDisplayName(period.phase))}: ` +
+        `${escapeHtml(formatPhaseDate(period.start))} – ${escapeHtml(formatPhaseDate(period.end))}</span>`
+    ).join('');
+}
+
+function renderPhasePeriodList() {
+    const list = document.getElementById('phase-period-list');
+    if (!list) return;
+    if (phasePeriods.length === 0) {
+        list.innerHTML = '<span class="text-muted small">No saved periods.</span>';
+        return;
+    }
+    list.innerHTML = phasePeriods.map(period => `
+        <div class="phase-period-item">
+            <div><strong>${escapeHtml(phaseDisplayName(period.phase))}</strong><br>
+            <small>${escapeHtml(formatPhaseDate(period.start))} – ${escapeHtml(formatPhaseDate(period.end))}</small></div>
+            <button type="button" class="btn btn-sm btn-outline-danger" onclick="deletePhasePeriod(${period.id})" aria-label="Delete phase period">
+                <i class="fas fa-trash"></i>
+            </button>
+        </div>
+    `).join('');
+}
+
+async function addPhasePeriod() {
+    const phase = document.getElementById('phase-period-type')?.value;
+    const start = document.getElementById('phase-period-start')?.value;
+    const end = document.getElementById('phase-period-end')?.value;
+    const status = document.getElementById('phase-period-status');
+    if (!start || !end) {
+        if (status) status.textContent = 'Choose both start and end times.';
+        return;
+    }
+    try {
+        await postJson('/phase-periods', { phase, start, end });
+        if (status) status.textContent = 'Period saved.';
+        loadPhasePeriods();
+    } catch (error) {
+        if (status) status.textContent = error.message;
+    }
+}
+
+async function deletePhasePeriod(periodId) {
+    try {
+        const response = await fetch(`${API_BASE}/phase-periods/${periodId}`, { method: 'DELETE' });
+        const data = await parseApiResponse(response);
+        if (!response.ok || data.error) throw new Error(data.error || 'Delete failed');
+        loadPhasePeriods();
+    } catch (error) {
+        const status = document.getElementById('phase-period-status');
+        if (status) status.textContent = error.message;
+    }
+}
+
 /**
  * Save growth phase
  */
@@ -1189,6 +1389,7 @@ function saveGrowthPhase() {
             return;
         }
         alert('Phase updated successfully!');
+        loadPhasePeriods();
     })
     .catch(error => {
         alert('Error updating phase: ' + error);
@@ -1528,6 +1729,7 @@ function updateCharts() {
         coverageChart.data.datasets[0].data = sensorHistory.coverage;
         coverageChart.update('none');
     }
+    renderPhaseHelp();
 }
 
 function loadCoverageComparison() {
@@ -1560,7 +1762,7 @@ function loadCoverageComparison() {
     const sampleEveryHours = sampleInput ? Math.max(1, Number(sampleInput.value) || 1) : 1;
     const topCrop = document.getElementById('coverage-crop-top') ? Number(document.getElementById('coverage-crop-top').value) : 20;
     const leftCrop = document.getElementById('coverage-crop-left') ? Number(document.getElementById('coverage-crop-left').value) : 20;
-    const rightCrop = document.getElementById('coverage-crop-right') ? Number(document.getElementById('coverage-crop-right').value) : 14;
+    const rightCrop = document.getElementById('coverage-crop-right') ? Number(document.getElementById('coverage-crop-right').value) : 10;
     const bottomCrop = document.getElementById('coverage-crop-bottom') ? Number(document.getElementById('coverage-crop-bottom').value) : 9;
 
     if (!startValue || !endValue) {

@@ -196,7 +196,7 @@
                                 <label for="time-range-select" class="form-label">
                                     <i class="fas fa-calendar"></i> Chart Time Range
                                 </label>
-                                <div class="btn-group" role="group">
+                                <div class="btn-group flex-wrap" role="group">
                                     <input type="radio" class="btn-check" name="time-range" id="time-1h" value="1" checked>
                                     <label class="btn btn-outline-primary" for="time-1h">1 Hour</label>
 
@@ -211,6 +211,28 @@
 
                                     <input type="radio" class="btn-check" name="time-range" id="time-30d" value="720">
                                     <label class="btn btn-outline-primary" for="time-30d">30 Days</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-custom" value="custom">
+                                    <label class="btn btn-outline-primary" for="time-custom">Custom</label>
+                                </div>
+                                <div id="custom-chart-range" class="row g-2 align-items-end mt-2 d-none">
+                                    <div class="col-md-5">
+                                        <label for="chart-start-date" class="form-label mb-1">From</label>
+                                        <input type="datetime-local" class="form-control" id="chart-start-date">
+                                    </div>
+                                    <div class="col-md-5">
+                                        <label for="chart-end-date" class="form-label mb-1">To</label>
+                                        <input type="datetime-local" class="form-control" id="chart-end-date">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <button type="button" class="btn btn-primary w-100" id="apply-chart-range">Apply</button>
+                                    </div>
+                                </div>
+                                <div class="phase-help mt-3" id="chart-phase-help">
+                                    <span class="phase-legend phase-colonization">Incubation</span>
+                                    <span class="phase-legend phase-fruiting">Fruiting</span>
+                                    <small class="text-muted d-block mt-1" id="chart-range-info">Loading chart data...</small>
+                                    <small class="text-muted d-block mt-1" id="chart-phase-summary">No phase periods recorded yet.</small>
                                 </div>
                             </div>
                         </div>
@@ -268,8 +290,8 @@
                                             </div>
                                             <div class="col-md-3">
                                                 <label for="coverage-crop-right" class="form-label">Crop right (%)</label>
-                                                <input type="range" id="coverage-crop-right" min="0" max="40" step="1" value="14" class="form-range">
-                                                <small class="form-text text-muted"><span id="coverage-crop-right-val">14</span>%</small>
+                                                <input type="range" id="coverage-crop-right" min="0" max="40" step="1" value="10" class="form-range">
+                                                <small class="form-text text-muted"><span id="coverage-crop-right-val">10</span>%</small>
                                             </div>
                                             <div class="col-md-3">
                                                 <label for="coverage-crop-bottom" class="form-label">Crop bottom (%)</label>
@@ -410,6 +432,23 @@
                                 <button class="btn btn-primary w-100 mt-2" onclick="saveGrowthPhase()">
                                     Save Phase
                                 </button>
+                                <hr>
+                                <h6>Chart phase periods</h6>
+                                <p class="small text-muted mb-2">Add past periods to color and explain the charts.</p>
+                                <label for="phase-period-type" class="form-label">Phase</label>
+                                <select id="phase-period-type" class="form-select">
+                                    <option value="colonization">Incubation</option>
+                                    <option value="fruiting">Fruiting</option>
+                                </select>
+                                <label for="phase-period-start" class="form-label mt-2">Start</label>
+                                <input type="datetime-local" id="phase-period-start" class="form-control">
+                                <label for="phase-period-end" class="form-label mt-2">End</label>
+                                <input type="datetime-local" id="phase-period-end" class="form-control">
+                                <button class="btn btn-outline-primary w-100 mt-2" type="button" onclick="addPhasePeriod()">
+                                    Add Period
+                                </button>
+                                <div id="phase-period-status" class="small mt-2"></div>
+                                <div id="phase-period-list" class="phase-period-list mt-2"></div>
                             </div>
                         </div>
                     </div>

@@ -2,11 +2,22 @@
 # These are the "white" color ranges
 MYCELIUM_LOWER_H = 0
 MYCELIUM_LOWER_S = 0
-MYCELIUM_LOWER_V = 150
+MYCELIUM_LOWER_V = 135
 
 MYCELIUM_UPPER_H = 180
 MYCELIUM_UPPER_S = 50
 MYCELIUM_UPPER_V = 255
+
+# Fixed inner region used for production coverage measurements.  The camera and
+# tray are stationary, so using the same conservative region on every capture
+# gives a stable denominator and excludes the grow-box walls and reflections.
+# Values are percentages of the original image dimensions.
+MYCELIUM_ROI_CROP = {
+    'top': 20,
+    'left': 20,
+    'right': 10,
+    'bottom': 9,
+}
 
 # Image save paths
 import os

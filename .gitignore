@@ -1,2 +1,7 @@
+__pycache__/
+*.py[cod]
+.test-deps/
+.venv/
+venv/
 Clean_code.pdf
 OO_alapelvek.pdf

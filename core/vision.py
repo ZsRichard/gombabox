@@ -1,10 +1,11 @@
 # core/vision.py
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image
 import numpy as np
 import logging
 from core.constants import (
     MYCELIUM_LOWER_H, MYCELIUM_LOWER_S, MYCELIUM_LOWER_V,
-    MYCELIUM_UPPER_H, MYCELIUM_UPPER_S, MYCELIUM_UPPER_V
+    MYCELIUM_UPPER_H, MYCELIUM_UPPER_S, MYCELIUM_UPPER_V,
+    MYCELIUM_ROI_CROP,
 )
 
 logger = logging.getLogger(__name__)
@@ -16,15 +17,26 @@ class ImageAnalyzer:
     """
     
     @staticmethod
-    def calculate_mycelium_coverage(image_path: str, preprocessing: str = "legacy") -> float:
+    def calculate_mycelium_coverage(image_path: str, preprocessing: str = "roi") -> float:
         """
-        Calculates the mycelium (white areas) ratio as a percentage.
+        Calculate visible mycelium coverage as a percentage.
+
+        ``roi`` is the production method: it measures the fixed inner substrate
+        region so box walls and reflections are not part of the denominator.
+        ``legacy`` preserves the historical full-frame calculation.
         """
         if not image_path:
             return 0.0
             
         try:
             pil_image = Image.open(image_path).convert('RGB').copy()
+            if preprocessing == "roi":
+                pil_image = ImageAnalyzer._crop_image_edges(
+                    pil_image, crop_params=MYCELIUM_ROI_CROP
+                )
+            elif preprocessing != "legacy":
+                raise ValueError(f"Unknown preprocessing mode: {preprocessing}")
+
             white_pixels, total_pixels = ImageAnalyzer._count_white_pixels(pil_image)
             
             if total_pixels == 0:
@@ -38,10 +50,27 @@ class ImageAnalyzer:
             return 0.0
 
     @staticmethod
-    def calculate_mycelium_coverage_from_image(pil_image: Image.Image) -> float:
-        """Calculate coverage from an in-memory PIL image without touching disk."""
+    def calculate_mycelium_coverage_from_image(
+        pil_image: Image.Image,
+        preprocessing: str = "legacy",
+        crop_params: dict = None,
+    ) -> float:
+        """Calculate coverage from an in-memory image without touching disk.
+
+        The default remains ``legacy`` because callers such as the comparison
+        preview may already pass a cropped image.  Use ``roi`` for a raw camera
+        frame; optional ``crop_params`` override the calibrated production ROI.
+        """
         try:
-            white_pixels, total_pixels = ImageAnalyzer._count_white_pixels(pil_image.convert('RGB').copy())
+            image = pil_image.convert('RGB').copy()
+            if preprocessing == "roi":
+                image = ImageAnalyzer._crop_image_edges(
+                    image, crop_params=crop_params or MYCELIUM_ROI_CROP
+                )
+            elif preprocessing != "legacy":
+                raise ValueError(f"Unknown preprocessing mode: {preprocessing}")
+
+            white_pixels, total_pixels = ImageAnalyzer._count_white_pixels(image)
             if total_pixels == 0:
                 return 0.0
 
@@ -59,10 +88,30 @@ class ImageAnalyzer:
         percentages (0-100). When provided, these override the automatic extra trims.
         """
         img = pil_image.convert('RGB').copy()
-        preview_image = ImageAnalyzer._crop_image_edges(img, crop_params=crop_params)
-        preview_image = ImageOps.autocontrast(preview_image)
-        preview_image = preview_image.filter(ImageFilter.GaussianBlur(radius=1.0))
-        return preview_image
+        # Do not apply autocontrast here.  It changes the meaning of the fixed
+        # brightness threshold and was observed to undercount late-stage growth.
+        # Keeping the preview to a crop-only transform makes it identical to the
+        # production ROI measurement and therefore directly comparable.
+        return ImageAnalyzer._crop_image_edges(
+            img, crop_params=crop_params or MYCELIUM_ROI_CROP
+        )
+
+    @staticmethod
+    def create_mycelium_mask_image(pil_image: Image.Image) -> Image.Image:
+        """Return the exact binary mask used by the coverage calculation."""
+        mask = ImageAnalyzer._create_white_mask(pil_image.convert('RGB'))
+        return Image.fromarray((mask.astype(np.uint8) * 255), mode='L')
+
+    @staticmethod
+    def create_mask_overlay_image(pil_image: Image.Image, opacity: float = 0.45) -> Image.Image:
+        """Overlay detected mycelium pixels for visual quality control."""
+        image = pil_image.convert('RGB').copy()
+        mask = ImageAnalyzer._create_white_mask(image)
+        base = np.asarray(image, dtype=np.float32).copy()
+        overlay_color = np.array([120.0, 50.0, 210.0], dtype=np.float32)
+        alpha = min(1.0, max(0.0, float(opacity)))
+        base[mask] = (base[mask] * (1.0 - alpha)) + (overlay_color * alpha)
+        return Image.fromarray(np.clip(base, 0, 255).astype(np.uint8), mode='RGB')
 
     @staticmethod
     def _crop_image_edges(pil_image: Image.Image, crop_params: dict = None) -> Image.Image:
@@ -179,7 +228,13 @@ class ImageAnalyzer:
             return pil_image.crop((left, top, right, bottom))
 
     @staticmethod
-    def _count_white_pixels(pil_image: Image.Image) -> tuple:
+    def _create_white_mask(
+        pil_image: Image.Image,
+        brightness_threshold: float = MYCELIUM_LOWER_V,
+        saturation_threshold: float = MYCELIUM_UPPER_S / 255.0,
+        expand_edges: bool = True,
+    ) -> np.ndarray:
+        """Classify visible white, low-saturation pixels as mycelium."""
         rgb_image = np.array(pil_image)
 
         r = rgb_image[:, :, 0].astype(np.float32)
@@ -198,10 +253,13 @@ class ImageAnalyzer:
                 where=max_val > 0
             )
 
-        white_mask = (gray > MYCELIUM_LOWER_V) & (saturation < 0.25)
+        white_mask = (
+            (gray > float(brightness_threshold))
+            & (saturation < float(saturation_threshold))
+        )
 
         # Expand the mask by one pixel in every direction so fuzzy colony edges count too.
-        if white_mask.any():
+        if expand_edges and white_mask.any():
             padded = np.pad(white_mask, 1, mode='constant', constant_values=False)
             expanded_mask = np.zeros_like(white_mask, dtype=bool)
             height, width = white_mask.shape
@@ -209,6 +267,12 @@ class ImageAnalyzer:
                 for dx in range(3):
                     expanded_mask |= padded[dy:dy + height, dx:dx + width]
             white_mask = expanded_mask
+
+        return white_mask
+
+    @staticmethod
+    def _count_white_pixels(pil_image: Image.Image) -> tuple:
+        white_mask = ImageAnalyzer._create_white_mask(pil_image)
 
         total_pixels = white_mask.size
         white_pixels = np.sum(white_mask)

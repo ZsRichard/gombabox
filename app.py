@@ -34,7 +34,7 @@ from flask import Flask, jsonify, render_template, request, send_file, send_from
 from flask_sqlalchemy import SQLAlchemy
 
 # Database
-from models import db, Measurement, CameraCapture, SystemLog, Setting
+from models import db, Measurement, CameraCapture, SystemLog, Setting, GrowthPhasePeriod
 from config import Config, DEFAULTS
 from app_config import (
     DATABASE_URI, USE_MOCK_HARDWARE, API_HOST, API_PORT, API_DEBUG,
@@ -69,6 +69,8 @@ db.init_app(app)
 logging.basicConfig(level=LOGGING_LEVEL)
 logger = logging.getLogger(__name__)
 ENGINE_TICK_SECONDS = 1
+CHART_HISTORY_MAX_POINTS = 1000
+CHART_HISTORY_MAX_DAYS = 730
 
 DB_TABLES = {
     'measurements': {
@@ -282,6 +284,42 @@ def _parse_client_datetime(value, field_name):
         raise ValueError(f"Invalid datetime for '{field_name}'") from exc
 
 
+def _resolve_history_window(args, default_hours=1):
+    """Return a validated preset or custom chart time window."""
+    start_value = args.get('start')
+    end_value = args.get('end')
+    if start_value is not None or end_value is not None:
+        if not start_value or not end_value:
+            raise ValueError("Both 'start' and 'end' are required")
+        start_dt = _parse_client_datetime(start_value, 'start')
+        end_dt = _parse_client_datetime(end_value, 'end')
+        if end_dt <= start_dt:
+            raise ValueError("End datetime must be after start datetime")
+        if end_dt - start_dt > datetime.timedelta(days=CHART_HISTORY_MAX_DAYS):
+            raise ValueError(
+                f"Chart range cannot exceed {CHART_HISTORY_MAX_DAYS} days"
+            )
+        return start_dt, end_dt, None, 'custom'
+
+    try:
+        hours = int(args.get('hours', str(default_hours)))
+    except (TypeError, ValueError):
+        hours = default_hours
+    hours = min(max(hours, 1), 720)
+    end_dt = datetime.datetime.now()
+    return end_dt - datetime.timedelta(hours=hours), end_dt, hours, 'preset'
+
+
+def _evenly_sample(items, limit=CHART_HISTORY_MAX_POINTS):
+    """Keep a representative ordered subset, including both endpoints."""
+    if len(items) <= limit:
+        return items
+    if limit < 2:
+        return items[:limit]
+    last = len(items) - 1
+    return [items[round(index * last / (limit - 1))] for index in range(limit)]
+
+
 def _normalize_capture_directory(capture_dir):
     """Resolve and validate a user-supplied capture directory path."""
     if not capture_dir:
@@ -431,9 +469,11 @@ def _build_preprocessing_composite_image(image_path, crop_params=None):
         return image.resize((new_width, target_height), Image.Resampling.LANCZOS)
 
     left_image = fit_image(original_image)
-    right_image = fit_image(preprocessed_image)
+    middle_image = fit_image(preprocessed_image)
+    mask_overlay = ImageAnalyzer.create_mask_overlay_image(preprocessed_image)
+    right_image = fit_image(mask_overlay)
 
-    canvas_width = left_image.width + right_image.width + (gap * 3)
+    canvas_width = left_image.width + middle_image.width + right_image.width + (gap * 4)
     canvas_height = header_height + target_height + 24
     canvas = Image.new('RGB', (canvas_width, canvas_height), 'white')
     draw = ImageDraw.Draw(canvas)
@@ -446,18 +486,23 @@ def _build_preprocessing_composite_image(image_path, crop_params=None):
         small_font = ImageFont.load_default()
 
     left_x = gap
-    right_x = left_x + left_image.width + gap
+    middle_x = left_x + left_image.width + gap
+    right_x = middle_x + middle_image.width + gap
     image_y = header_height
 
     draw.rounded_rectangle((left_x - 6, image_y - 6, left_x + left_image.width + 6, image_y + target_height + 6), radius=12, outline='#b9b9b9', width=2)
+    draw.rounded_rectangle((middle_x - 6, image_y - 6, middle_x + middle_image.width + 6, image_y + target_height + 6), radius=12, outline='#b9b9b9', width=2)
     draw.rounded_rectangle((right_x - 6, image_y - 6, right_x + right_image.width + 6, image_y + target_height + 6), radius=12, outline='#b9b9b9', width=2)
 
     draw.text((left_x, 14), 'Original', fill='#222222', font=font)
-    draw.text((right_x, 14), 'Preprocessed preview', fill='#222222', font=font)
+    draw.text((middle_x, 14), 'Substrate ROI', fill='#222222', font=font)
+    draw.text((right_x, 14), 'Detected mycelium', fill='#222222', font=font)
     draw.text((left_x, 38), f'Coverage: {original_coverage:.2f}%', fill='#555555', font=small_font)
-    draw.text((right_x, 38), f'Coverage: {preprocessed_coverage:.2f}%', fill='#555555', font=small_font)
+    draw.text((middle_x, 38), f'Coverage: {preprocessed_coverage:.2f}%', fill='#555555', font=small_font)
+    draw.text((right_x, 38), 'Purple pixels are counted', fill='#555555', font=small_font)
 
     canvas.paste(left_image, (left_x, image_y))
+    canvas.paste(middle_image, (middle_x, image_y))
     canvas.paste(right_image, (right_x, image_y))
 
     return canvas, original_coverage, preprocessed_coverage
@@ -683,32 +728,32 @@ def get_latest_measurement():
 
 @app.route('/api/measurements/history', methods=['GET'])
 def get_measurements_history():
-    """Get measurement history for a given time range.
-    
-    Query parameters:
-    - hours: Number of hours back to retrieve (default: 1, max: 720 = 30 days)
-    """
+    """Get chart measurements by preset hours or an exact start/end range."""
     try:
-        hours = request.args.get('hours', '1', type=str)
-        try:
-            hours = int(hours)
-            hours = min(max(hours, 1), 720)  # Clamp between 1 and 720 hours
-        except ValueError:
-            hours = 1
-        
-        # Calculate time cutoff
-        time_cutoff = datetime.datetime.now() - datetime.timedelta(hours=hours)
-        
-        # Fetch measurements from the time range
-        measurements = Measurement.query.filter(
-            Measurement.timestamp >= time_cutoff
-        ).order_by(Measurement.timestamp.asc()).all()
-        
+        start_dt, end_dt, hours, mode = _resolve_history_window(request.args)
+        measurements_query = Measurement.query.filter(
+            Measurement.timestamp >= start_dt,
+            Measurement.timestamp <= end_dt
+        )
+        total_count = measurements_query.count()
+        if total_count > CHART_HISTORY_MAX_POINTS:
+            stride = (total_count + CHART_HISTORY_MAX_POINTS - 1) // CHART_HISTORY_MAX_POINTS
+            measurements_query = measurements_query.filter(Measurement.id % stride == 0)
+        measurements = measurements_query.order_by(
+            Measurement.timestamp.asc()
+        ).limit(CHART_HISTORY_MAX_POINTS).all()
+
         return jsonify({
             'measurements': [m.to_dict() for m in measurements],
             'hours': hours,
-            'count': len(measurements)
+            'mode': mode,
+            'start': start_dt.isoformat(timespec='minutes'),
+            'end': end_dt.isoformat(timespec='minutes'),
+            'count': total_count,
+            'returned_count': len(measurements)
         })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error fetching measurement history: {e}")
         return jsonify({'error': 'Failed to fetch measurement history'}), 500
@@ -716,31 +761,22 @@ def get_measurements_history():
 
 @app.route('/api/camera/history', methods=['GET'])
 def get_camera_history():
-    """Get camera capture history for a given time range.
-    
-    Query parameters:
-    - hours: Number of hours back to retrieve (default: 1, max: 720 = 30 days)
-    """
+    """Get camera history by preset hours or an exact start/end range."""
     try:
-        hours = request.args.get('hours', '1', type=str)
-        try:
-            hours = int(hours)
-            hours = min(max(hours, 1), 720)  # Clamp between 1 and 720 hours
-        except ValueError:
-            hours = 1
-        
-        # Calculate time cutoff
-        time_cutoff = datetime.datetime.now() - datetime.timedelta(hours=hours)
-        
-        # Fetch camera captures from the time range
+        start_dt, end_dt, hours, mode = _resolve_history_window(request.args)
         captures = CameraCapture.query.filter(
-            CameraCapture.timestamp >= time_cutoff
+            CameraCapture.timestamp >= start_dt,
+            CameraCapture.timestamp <= end_dt
         ).order_by(CameraCapture.timestamp.asc()).all()
-        
+        total_count = len(captures)
+        captures = _evenly_sample(captures)
+
         # Extract timestamps and coverage percentages
         capture_data = []
         for capture in captures:
-            capture_path = resolve_capture_file_path(capture.filename)
+            capture_path = None
+            if not capture.analysis_result or not str(capture.analysis_result).strip():
+                capture_path = resolve_capture_file_path(capture.filename)
             capture_data.append({
                 'time': capture.timestamp.strftime('%Y-%m-%d %H:%M'),
                 'analysis': _capture_analysis_value(capture, capture_path)
@@ -749,8 +785,14 @@ def get_camera_history():
         return jsonify({
             'captures': capture_data,
             'hours': hours,
-            'count': len(capture_data)
+            'mode': mode,
+            'start': start_dt.isoformat(timespec='minutes'),
+            'end': end_dt.isoformat(timespec='minutes'),
+            'count': total_count,
+            'returned_count': len(capture_data)
         })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error fetching camera history: {e}")
         return jsonify({'error': 'Failed to fetch camera history'}), 500
@@ -1273,7 +1315,23 @@ def growth_phase():
         if phase not in ['colonization', 'fruiting']:
             return jsonify({'error': 'Invalid phase value'}), 400
 
+        previous_phase = str(Config.get('growth_phase') or '').strip().lower()
         Config.set('growth_phase', phase)
+        if phase != previous_phase:
+            changed_at = datetime.datetime.now()
+            GrowthPhasePeriod.query.filter_by(end_time=None).update(
+                {'end_time': changed_at}, synchronize_session=False
+            )
+            db.session.add(GrowthPhasePeriod(
+                phase=phase,
+                start_time=changed_at,
+                end_time=None
+            ))
+            db.session.add(SystemLog(
+                level='INFO',
+                message=f"Growth phase changed from {previous_phase or 'unknown'} to {phase}"
+            ))
+            db.session.commit()
         logger.info(f"Growth phase updated to '{phase}'")
         _restart_service_async()
         return jsonify({'status': 'restarting', 'phase': phase})
@@ -1282,6 +1340,75 @@ def growth_phase():
         logger.error(f"Error handling growth phase: {e}")
         logger.exception(e)
         return jsonify({'error': 'Failed to handle growth phase'}), 500
+
+
+@app.route('/api/phase-periods', methods=['GET', 'POST'])
+def phase_periods():
+    """List or add intervals used as phase guidance on the charts."""
+    try:
+        if request.method == 'GET':
+            query = GrowthPhasePeriod.query
+            if request.args.get('start') and request.args.get('end'):
+                start_dt = _parse_client_datetime(request.args['start'], 'start')
+                end_dt = _parse_client_datetime(request.args['end'], 'end')
+                query = query.filter(
+                    GrowthPhasePeriod.start_time <= end_dt,
+                    db.or_(
+                        GrowthPhasePeriod.end_time.is_(None),
+                        GrowthPhasePeriod.end_time >= start_dt
+                    )
+                )
+            periods = query.order_by(GrowthPhasePeriod.start_time.asc()).all()
+            return jsonify({'periods': [period.to_dict() for period in periods]})
+
+        payload = request.get_json(silent=True) or {}
+        phase = str(payload.get('phase') or '').strip().lower()
+        if phase not in ['colonization', 'fruiting']:
+            return jsonify({'error': 'Phase must be colonization or fruiting'}), 400
+        start_dt = _parse_client_datetime(payload.get('start'), 'start')
+        end_value = payload.get('end')
+        end_dt = _parse_client_datetime(end_value, 'end') if end_value else None
+        if end_dt and end_dt <= start_dt:
+            return jsonify({'error': 'End datetime must be after start datetime'}), 400
+
+        candidate_end = end_dt or datetime.datetime.max
+        for existing in GrowthPhasePeriod.query.all():
+            existing_end = existing.end_time or datetime.datetime.max
+            if start_dt < existing_end and candidate_end > existing.start_time:
+                return jsonify({
+                    'error': 'This interval overlaps an existing phase period'
+                }), 409
+
+        period = GrowthPhasePeriod(
+            phase=phase,
+            start_time=start_dt,
+            end_time=end_dt
+        )
+        db.session.add(period)
+        db.session.commit()
+        return jsonify({'status': 'created', 'period': period.to_dict()}), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error handling phase periods: {e}")
+        db.session.rollback()
+        return jsonify({'error': 'Failed to handle phase periods'}), 500
+
+
+@app.route('/api/phase-periods/<int:period_id>', methods=['DELETE'])
+def delete_phase_period(period_id):
+    """Delete an incorrectly entered chart phase interval."""
+    try:
+        period = db.session.get(GrowthPhasePeriod, period_id)
+        if not period:
+            return jsonify({'error': 'Phase period not found'}), 404
+        db.session.delete(period)
+        db.session.commit()
+        return jsonify({'status': 'deleted'})
+    except Exception as e:
+        logger.error(f"Error deleting phase period {period_id}: {e}")
+        db.session.rollback()
+        return jsonify({'error': 'Failed to delete phase period'}), 500
 
 
 @app.route('/api/relay/<int:relay_id>', methods=['GET', 'POST'])

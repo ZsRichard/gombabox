@@ -85,3 +85,21 @@ class SystemLog(db.Model):
             'level': self.level,
             'message': self.message
         }
+
+
+class GrowthPhasePeriod(db.Model):
+    """A manually entered or automatically recorded growth-phase interval."""
+    __tablename__ = 'growth_phase_periods'
+
+    id = db.Column(db.Integer, primary_key=True)
+    phase = db.Column(db.String(20), nullable=False, index=True)
+    start_time = db.Column(db.DateTime, nullable=False, index=True)
+    end_time = db.Column(db.DateTime, nullable=True, index=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'phase': self.phase,
+            'start': self.start_time.isoformat(timespec='minutes'),
+            'end': self.end_time.isoformat(timespec='minutes') if self.end_time else None
+        }

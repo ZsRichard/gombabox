@@ -121,6 +121,50 @@ body {
     margin-bottom: 20px;
 }
 
+.phase-help {
+    padding: 10px 12px;
+    background: #f8f9fa;
+    border-radius: 6px;
+}
+
+.phase-legend::before {
+    content: '';
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin-right: 5px;
+    border-radius: 3px;
+    vertical-align: -1px;
+}
+
+.phase-legend {
+    margin-right: 16px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.phase-colonization::before {
+    background: rgba(46, 204, 113, 0.45);
+}
+
+.phase-fruiting::before {
+    background: rgba(243, 156, 18, 0.45);
+}
+
+.phase-period-list {
+    max-height: 230px;
+    overflow-y: auto;
+}
+
+.phase-period-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
 .alert-custom {
     border-radius: 8px;
     border-left: 4px solid;
