@@ -5,7 +5,7 @@ const API_BASE = '/api';
 const REFRESH_INTERVAL = 5000; // 5 seconds
 const BACKGROUND_REFRESH_INTERVAL = 20000; // lower battery use when hidden
 const OFFLINE_REFRESH_INTERVAL = 30000; // avoid aggressive retries when offline
-const CHART_MAX_POINTS = 500; // Increased for handling larger time ranges
+const HISTORY_REFRESH_INTERVAL = 20000;
 
 // Chart instances
 let tempChart = null;
@@ -18,15 +18,21 @@ let dataRefreshTimer = null;
 let logsRefreshTimer = null;
 let deferredInstallPrompt = null;
 let coveragePreviewDebounceTimer = null;
+let historyRequestSequence = 0;
+let lastHistoryRefreshAt = 0;
 
 // Current time range setting (in hours)
 let currentTimeRange = 1;
 let currentCustomRange = null;
 let phasePeriods = [];
+let phaseCalendarMonth = null;
+let timelapseCalendarMonth = null;
+let timelapseCalendarSelection = 'start';
+let chartCalendarSelection = 'start';
 
 const GROWTH_PHASE_COLORS = {
-    colonization: 'rgba(46, 204, 113, 0.12)',
-    fruiting: 'rgba(243, 156, 18, 0.12)'
+    colonization: 'rgba(111, 128, 93, 0.13)',
+    fruiting: 'rgba(169, 104, 77, 0.12)'
 };
 
 const growthPhaseBackgroundPlugin = {
@@ -103,6 +109,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Set up time range selector listeners
     setupTimeRangeSelector();
     initializeCustomChartRange();
+    initializePhaseCalendarPopovers();
     
     initializeCharts();
     loadInitialData();
@@ -132,8 +139,77 @@ function initializeMediaExportDates() {
     start.setSeconds(0, 0);
     now.setSeconds(0, 0);
 
-    startInput.value = toDateTimeLocalInputValue(start);
-    endInput.value = toDateTimeLocalInputValue(now);
+    setDashboardDateInputValue(startInput, toDateTimeLocalInputValue(start));
+    setDashboardDateInputValue(endInput, toDateTimeLocalInputValue(now));
+
+    const previousMonthButton = document.getElementById('timelapse-calendar-prev');
+    const nextMonthButton = document.getElementById('timelapse-calendar-next');
+    if (previousMonthButton) previousMonthButton.addEventListener('click', () => shiftTimelapseCalendarMonth(-1));
+    if (nextMonthButton) nextMonthButton.addEventListener('click', () => shiftTimelapseCalendarMonth(1));
+    startInput.addEventListener('change', renderTimelapsePhaseCalendar);
+    endInput.addEventListener('change', renderTimelapsePhaseCalendar);
+}
+
+function initializePhaseCalendarPopovers() {
+    const triggerMap = {
+        'timelapse-start-date': 'timelapse-calendar-popup',
+        'timelapse-end-date': 'timelapse-calendar-popup',
+        'chart-start-date': 'chart-calendar-popup',
+        'chart-end-date': 'chart-calendar-popup'
+    };
+
+    Object.entries(triggerMap).forEach(([inputId, popupId]) => {
+        const input = document.getElementById(inputId);
+        if (!input) return;
+        const openForInput = () => {
+            const isTimelapse = inputId.startsWith('timelapse-');
+            const selection = inputId.includes('-start-') ? 'start' : 'end';
+            const inputDateValue = getDashboardDateInputValue(input);
+            const selectedDate = inputDateValue ? parseDashboardDate(inputDateValue) : new Date();
+
+            if (isTimelapse) {
+                timelapseCalendarSelection = selection;
+                if (!Number.isNaN(selectedDate.getTime())) {
+                    timelapseCalendarMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+                }
+                renderTimelapsePhaseCalendar();
+            } else {
+                chartCalendarSelection = selection;
+                if (!Number.isNaN(selectedDate.getTime())) {
+                    phaseCalendarMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+                }
+                renderPhaseCalendar();
+            }
+            openPhaseCalendarPopup(popupId);
+        };
+        input.addEventListener('click', openForInput);
+        input.addEventListener('focus', openForInput);
+    });
+
+    document.addEventListener('click', event => {
+        const clickedPopup = event.composedPath().some(node => node?.classList?.contains('phase-calendar-popup'));
+        const clickedTrigger = Object.keys(triggerMap).some(inputId => event.target.id === inputId);
+        if (!clickedPopup && !clickedTrigger) closePhaseCalendarPopups();
+    });
+
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closePhaseCalendarPopups();
+    });
+}
+
+function openPhaseCalendarPopup(popupId) {
+    document.querySelectorAll('.phase-calendar-popup').forEach(popup => {
+        const shouldOpen = popup.id === popupId;
+        popup.classList.toggle('is-open', shouldOpen);
+        popup.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
+    });
+}
+
+function closePhaseCalendarPopups() {
+    document.querySelectorAll('.phase-calendar-popup').forEach(popup => {
+        popup.classList.remove('is-open');
+        popup.setAttribute('aria-hidden', 'true');
+    });
 }
 
 function initializeCoveragePreviewInterval() {
@@ -173,6 +249,53 @@ function toDateTimeLocalInputValue(dateObj) {
     return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
+function setDashboardDateInputValue(input, isoValue) {
+    if (!input) return;
+    input.dataset.isoValue = isoValue;
+    const date = parseDashboardDate(isoValue);
+    input.value = Number.isNaN(date.getTime()) ? isoValue : formatHungarianDateTime(date);
+}
+
+function getDashboardDateInputValue(input) {
+    if (!input) return '';
+    return input.dataset.isoValue || input.value || '';
+}
+
+function formatHungarianDateTime(value) {
+    const date = value instanceof Date ? value : parseDashboardDate(value);
+    if (Number.isNaN(date.getTime())) return String(value || '');
+    return new Intl.DateTimeFormat('hu-HU', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    }).format(date);
+}
+
+function formatHungarianChartLabel(value, labels = []) {
+    const date = parseDashboardDate(value);
+    if (Number.isNaN(date.getTime())) return String(value || '');
+
+    const first = labels.length ? parseDashboardDate(labels[0]) : date;
+    const last = labels.length ? parseDashboardDate(labels[labels.length - 1]) : date;
+    const spanHours = Math.abs(last.getTime() - first.getTime()) / 3600000;
+
+    if (spanHours <= 48) {
+        return new Intl.DateTimeFormat('hu-HU', {
+            hour: '2-digit', minute: '2-digit'
+        }).format(date);
+    }
+    if (spanHours <= 24 * 370) {
+        return new Intl.DateTimeFormat('hu-HU', {
+            month: '2-digit', day: '2-digit'
+        }).format(date);
+    }
+    return new Intl.DateTimeFormat('hu-HU', {
+        year: '2-digit', month: '2-digit'
+    }).format(date);
+}
+
 function parseDashboardDate(value) {
     if (value instanceof Date) return value;
     return new Date(String(value).replace(' ', 'T'));
@@ -180,8 +303,12 @@ function parseDashboardDate(value) {
 
 function initializeCustomChartRange() {
     const applyButton = document.getElementById('apply-chart-range');
+    const previousMonthButton = document.getElementById('phase-calendar-prev');
+    const nextMonthButton = document.getElementById('phase-calendar-next');
     setCustomChartIntervalFromHours(24);
     if (applyButton) applyButton.addEventListener('click', applyCustomChartRange);
+    if (previousMonthButton) previousMonthButton.addEventListener('click', () => shiftPhaseCalendarMonth(-1));
+    if (nextMonthButton) nextMonthButton.addEventListener('click', () => shiftPhaseCalendarMonth(1));
 }
 
 function setCustomChartIntervalFromHours(hours) {
@@ -193,23 +320,26 @@ function setCustomChartIntervalFromHours(hours) {
     start.setHours(start.getHours() - Math.max(1, Number(hours) || 24));
     start.setSeconds(0, 0);
     end.setSeconds(0, 0);
-    startInput.value = toDateTimeLocalInputValue(start);
-    endInput.value = toDateTimeLocalInputValue(end);
+    setDashboardDateInputValue(startInput, toDateTimeLocalInputValue(start));
+    setDashboardDateInputValue(endInput, toDateTimeLocalInputValue(end));
 }
 
 function applyCustomChartRange() {
-    const start = document.getElementById('chart-start-date')?.value;
-    const end = document.getElementById('chart-end-date')?.value;
+    const start = getDashboardDateInputValue(document.getElementById('chart-start-date'));
+    const end = getDashboardDateInputValue(document.getElementById('chart-end-date'));
     if (!start || !end || parseDashboardDate(end) <= parseDashboardDate(start)) {
         updateHistoryDataInfo('Please select a valid custom start and end time.');
         return;
     }
     currentTimeRange = null;
     currentCustomRange = { start, end };
+    phaseCalendarMonth = new Date(parseDashboardDate(start).getFullYear(), parseDashboardDate(start).getMonth(), 1);
+    renderPhaseCalendar();
     const previewStart = document.getElementById('coverage-preview-start');
     const previewEnd = document.getElementById('coverage-preview-end');
     if (previewStart) previewStart.value = start;
     if (previewEnd) previewEnd.value = end;
+    updateHistoryDataInfo('A kiválasztott időszak adatainak betöltése…');
     loadHistoricalData();
 }
 
@@ -251,8 +381,8 @@ function buildDateRangePayload() {
         throw new Error('Date fields are not available on this page.');
     }
 
-    const start = (startInput.value || '').trim();
-    const end = (endInput.value || '').trim();
+    const start = getDashboardDateInputValue(startInput).trim();
+    const end = getDashboardDateInputValue(endInput).trim();
     if (!start || !end) {
         throw new Error('Please select both start and end times.');
     }
@@ -291,6 +421,9 @@ function runDataRefreshCycle() {
     loadCameraData();
     checkSystemStatus();
     refreshRelayStates();
+    if (currentTimeRange !== null && Date.now() - lastHistoryRefreshAt >= HISTORY_REFRESH_INTERVAL) {
+        loadHistoricalData();
+    }
 }
 
 function resetAutoRefreshTimers() {
@@ -313,14 +446,38 @@ function resetAutoRefreshTimers() {
 }
 
 function updateNetworkStatusUI() {
-    const networkAlert = document.getElementById('network-alert');
-    if (networkAlert) {
-        networkAlert.classList.toggle('d-none', navigator.onLine);
+    if (!navigator.onLine) {
+        setNavbarSystemStatus({
+            title: 'No connection',
+            detail: 'Live updates are paused',
+            badge: 'Offline',
+            tone: 'offline',
+            icon: 'fa-wifi-slash'
+        });
+    } else {
+        setNavbarSystemStatus({
+            title: 'Checking system',
+            detail: 'Connecting to GombaBox',
+            badge: 'Checking',
+            tone: 'loading',
+            icon: 'fa-spinner fa-spin'
+        });
     }
 }
 
 function initializePwaSupport() {
     const installButton = document.getElementById('install-app-btn');
+    const mobileInstallMedia = window.matchMedia('(max-width: 767.98px)');
+    const standaloneMedia = window.matchMedia('(display-mode: standalone)');
+
+    const updateInstallButtonVisibility = () => {
+        if (!installButton) return;
+        const canOfferInstall = Boolean(deferredInstallPrompt)
+            && mobileInstallMedia.matches
+            && !standaloneMedia.matches
+            && !window.navigator.standalone;
+        installButton.classList.toggle('d-none', !canOfferInstall);
+    };
 
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
@@ -333,9 +490,7 @@ function initializePwaSupport() {
     window.addEventListener('beforeinstallprompt', (event) => {
         event.preventDefault();
         deferredInstallPrompt = event;
-        if (installButton) {
-            installButton.classList.remove('d-none');
-        }
+        updateInstallButtonVisibility();
         updatePwaDebugStatus();
     });
 
@@ -348,17 +503,20 @@ function initializePwaSupport() {
             deferredInstallPrompt.prompt();
             await deferredInstallPrompt.userChoice;
             deferredInstallPrompt = null;
-            installButton.classList.add('d-none');
+            updateInstallButtonVisibility();
         });
     }
 
     window.addEventListener('appinstalled', () => {
         deferredInstallPrompt = null;
-        if (installButton) {
-            installButton.classList.add('d-none');
-        }
+        updateInstallButtonVisibility();
         updatePwaDebugStatus();
+        window.dispatchEvent(new CustomEvent('gombabox:appinstalled'));
     });
+
+    mobileInstallMedia.addEventListener('change', updateInstallButtonVisibility);
+    standaloneMedia.addEventListener('change', updateInstallButtonVisibility);
+    updateInstallButtonVisibility();
 
     window.addEventListener('online', () => {
         updateNetworkStatusUI();
@@ -736,6 +894,8 @@ function setupTimeRangeSelector() {
  * Load historical sensor data for the selected time range
  */
 function loadHistoricalData() {
+    const requestId = ++historyRequestSequence;
+    lastHistoryRefreshAt = Date.now();
     const rangeParams = new URLSearchParams();
     if (currentCustomRange) {
         rangeParams.set('start', currentCustomRange.start);
@@ -750,6 +910,7 @@ function loadHistoricalData() {
         fetch(`${API_BASE}/camera/history?${rangeParams}`).then(parseApiResponse)
     ])
     .then(([measureData, cameraData]) => {
+        if (requestId !== historyRequestSequence) return;
         if (measureData.error) {
             console.error('Error fetching measurements:', measureData.error);
             updateHistoryDataInfo(`Error loading data: ${measureData.error}`);
@@ -821,10 +982,10 @@ function loadHistoricalData() {
         console.log(`Loaded ${sensorHistory.timestamps.length} chart points for ${rangeLabel}`);
         updateHistoryDataInfo(`${measureData.count} measurements, ${cameraData.count || 0} captures (${rangeLabel}${sampledNote})`);
         updateCharts();
-        renderPhaseHelp();
         loadCoverageComparison();
     })
     .catch(error => {
+        if (requestId !== historyRequestSequence) return;
         console.error('Fetch error:', error);
         updateHistoryDataInfo('Failed to load data');
     });
@@ -847,6 +1008,22 @@ function updateChartDataInfo(message) {
  */
 function initializeCharts() {
     Chart.register(growthPhaseBackgroundPlugin);
+    Chart.defaults.color = '#716b60';
+    Chart.defaults.borderColor = 'rgba(132, 123, 108, 0.18)';
+    Chart.defaults.font.family = 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    const chartXAxis = {
+        ticks: {
+            autoSkip: true,
+            maxTicksLimit: 7,
+            maxRotation: 0,
+            callback(value) {
+                return formatHungarianChartLabel(
+                    this.getLabelForValue(value),
+                    this.chart.data.labels || []
+                );
+            }
+        }
+    };
     const chartOptions = {
         responsive: true,
         maintainAspectRatio: false,
@@ -857,6 +1034,13 @@ function initializeCharts() {
             },
             filler: {
                 propagate: true
+            },
+            tooltip: {
+                callbacks: {
+                    title(items) {
+                        return items.length ? formatHungarianDateTime(items[0].label) : '';
+                    }
+                }
             }
         },
         scales: {
@@ -876,8 +1060,8 @@ function initializeCharts() {
                 datasets: [{
                     label: 'Temperature (°C)',
                     data: sensorHistory.temp,
-                    borderColor: '#e74c3c',
-                    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                    borderColor: '#a9684d',
+                    backgroundColor: 'rgba(169, 104, 77, 0.11)',
                     fill: true,
                     tension: 0.4
                 }]
@@ -885,6 +1069,7 @@ function initializeCharts() {
             options: {
                 ...chartOptions,
                 scales: {
+                    x: chartXAxis,
                     y: {
                         beginAtZero: false,
                         title: { display: true, text: 'Temperature (°C)' }
@@ -904,8 +1089,8 @@ function initializeCharts() {
                 datasets: [{
                     label: 'Humidity (%)',
                     data: sensorHistory.hum,
-                    borderColor: '#3498db',
-                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    borderColor: '#668c82',
+                    backgroundColor: 'rgba(102, 140, 130, 0.11)',
                     fill: true,
                     tension: 0.4
                 }]
@@ -913,6 +1098,7 @@ function initializeCharts() {
             options: {
                 ...chartOptions,
                 scales: {
+                    x: chartXAxis,
                     y: {
                         beginAtZero: true,
                         max: 100,
@@ -933,8 +1119,8 @@ function initializeCharts() {
                 datasets: [{
                     label: 'CO₂ (ppm)',
                     data: sensorHistory.co2,
-                    borderColor: '#f39c12',
-                    backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                    borderColor: '#98734e',
+                    backgroundColor: 'rgba(152, 115, 78, 0.11)',
                     fill: true,
                     tension: 0.4
                 }]
@@ -942,6 +1128,7 @@ function initializeCharts() {
             options: {
                 ...chartOptions,
                 scales: {
+                    x: chartXAxis,
                     y: {
                         beginAtZero: true,
                         title: { display: true, text: 'CO₂ (ppm)' }
@@ -961,8 +1148,8 @@ function initializeCharts() {
                 datasets: [{
                     label: 'Light (lux)',
                     data: sensorHistory.light,
-                    borderColor: '#2ecc71',
-                    backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                    borderColor: '#a59a55',
+                    backgroundColor: 'rgba(165, 154, 85, 0.11)',
                     fill: true,
                     tension: 0.4
                 }]
@@ -970,6 +1157,7 @@ function initializeCharts() {
             options: {
                 ...chartOptions,
                 scales: {
+                    x: chartXAxis,
                     y: {
                         beginAtZero: true,
                         title: { display: true, text: 'Light (lux)' }
@@ -989,8 +1177,8 @@ function initializeCharts() {
                 datasets: [{
                     label: 'Mycelium Coverage (%)',
                     data: sensorHistory.coverage,
-                    borderColor: '#9b59b6',
-                    backgroundColor: 'rgba(155, 89, 182, 0.1)',
+                    borderColor: '#58694b',
+                    backgroundColor: 'rgba(88, 105, 75, 0.12)',
                     fill: true,
                     tension: 0.4,
                     spanGaps: true
@@ -999,6 +1187,7 @@ function initializeCharts() {
             options: {
                 ...chartOptions,
                 scales: {
+                    x: chartXAxis,
                     y: {
                         beginAtZero: true,
                         max: 100,
@@ -1018,16 +1207,16 @@ function initializeCharts() {
                 datasets: [{
                     label: 'Original Coverage (%)',
                     data: [],
-                    borderColor: '#9b59b6',
-                    backgroundColor: 'rgba(155, 89, 182, 0.1)',
+                    borderColor: '#58694b',
+                    backgroundColor: 'rgba(88, 105, 75, 0.1)',
                     fill: false,
                     tension: 0.4,
                     spanGaps: true
                 }, {
                     label: 'Recalculated Coverage (%)',
                     data: [],
-                    borderColor: '#f39c12',
-                    backgroundColor: 'rgba(243, 156, 18, 0.08)',
+                    borderColor: '#a9684d',
+                    backgroundColor: 'rgba(169, 104, 77, 0.08)',
                     borderDash: [8, 4],
                     fill: false,
                     tension: 0.4,
@@ -1037,6 +1226,7 @@ function initializeCharts() {
             options: {
                 ...chartOptions,
                 scales: {
+                    x: chartXAxis,
                     y: {
                         beginAtZero: true,
                         max: 100,
@@ -1075,24 +1265,6 @@ function loadSensorData() {
             document.getElementById('co2-value').textContent = Number.isFinite(co2) ? co2 : '--';
             document.getElementById('light-value').textContent = Number.isFinite(light) ? light : '--';
 
-            // Add to history
-            const now = new Date().toLocaleTimeString();
-            sensorHistory.timestamps.push(now);
-            sensorHistory.temp.push(temperature);
-            sensorHistory.hum.push(humidity);
-            sensorHistory.co2.push(co2);
-            sensorHistory.light.push(light);
-
-            // Keep only last N points
-            if (sensorHistory.timestamps.length > CHART_MAX_POINTS) {
-                sensorHistory.timestamps.shift();
-                sensorHistory.temp.shift();
-                sensorHistory.hum.shift();
-                sensorHistory.co2.shift();
-                sensorHistory.light.shift();
-            }
-
-            updateCharts();
             updateTimestamp();
         })
         .catch(error => console.error('Fetch error:', error));
@@ -1121,13 +1293,6 @@ function loadCameraData() {
                 coveragePercent.toFixed(2) + '%';
             document.getElementById('coverage-bar').style.width = coveragePercent + '%';
 
-            // Add to history
-            sensorHistory.coverage.push(coveragePercent);
-            if (sensorHistory.coverage.length > CHART_MAX_POINTS) {
-                sensorHistory.coverage.shift();
-            }
-
-            updateCharts();
         })
         .catch(error => console.error('Camera fetch error:', error));
 }
@@ -1276,16 +1441,36 @@ function loadGrowthPhase() {
             if (select && data.phase) {
                 select.value = data.phase;
             }
+            updateGrowthPhaseUi(data.phase === 'stopped');
         })
         .catch(error => console.error('Phase error:', error));
+}
+
+function updateGrowthPhaseUi(isStopped) {
+    const status = document.getElementById('growth-phase-status');
+    if (status) {
+        status.textContent = isStopped
+            ? 'Stopped: sensor logging, automatic control and image capture are disabled.'
+            : 'Active: sensor logging, automatic control and scheduled image capture are enabled.';
+    }
+
+    const captureButton = document.getElementById('capture-now-btn');
+    if (captureButton) {
+        captureButton.disabled = isStopped;
+        captureButton.title = isStopped ? 'Image capture is disabled while the system is stopped.' : '';
+    }
+
+    document.querySelectorAll('.relay-toggle').forEach(toggle => {
+        toggle.disabled = isStopped;
+    });
 }
 
 function formatPhaseDate(value) {
     if (!value) return 'ongoing';
     const date = parseDashboardDate(value);
     if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleString([], {
-        year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit'
+    return date.toLocaleString('hu-HU', {
+        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
     });
 }
 
@@ -1298,72 +1483,172 @@ function loadPhasePeriods() {
         .then(parseApiResponse)
         .then(data => {
             phasePeriods = data.periods || [];
-            renderPhasePeriodList();
-            renderPhaseHelp();
+            if (!phaseCalendarMonth) {
+                const latestPeriod = phasePeriods[phasePeriods.length - 1];
+                const calendarDate = latestPeriod
+                    ? parseDashboardDate(latestPeriod.end || latestPeriod.start)
+                    : new Date();
+                phaseCalendarMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1);
+            }
+            if (!timelapseCalendarMonth) {
+                timelapseCalendarMonth = new Date(phaseCalendarMonth.getFullYear(), phaseCalendarMonth.getMonth(), 1);
+            }
+            renderPhaseCalendar();
+            renderTimelapsePhaseCalendar();
             updateCharts();
         })
         .catch(error => console.error('Phase period error:', error));
 }
 
-function renderPhaseHelp() {
-    const summary = document.getElementById('chart-phase-summary');
-    if (!summary) return;
-    if (phasePeriods.length === 0) {
-        summary.textContent = 'No phase periods recorded yet. Add them under Controls → Growth Phase.';
-        return;
-    }
-    summary.innerHTML = phasePeriods.map(period =>
-        `<span class="d-inline-block me-3">${escapeHtml(phaseDisplayName(period.phase))}: ` +
-        `${escapeHtml(formatPhaseDate(period.start))} – ${escapeHtml(formatPhaseDate(period.end))}</span>`
-    ).join('');
+function periodsForCalendarDay(dayStart) {
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    return phasePeriods.filter(period => {
+        const periodStart = parseDashboardDate(period.start);
+        const periodEnd = period.end ? parseDashboardDate(period.end) : new Date(8640000000000000);
+        return periodStart < dayEnd && periodEnd > dayStart;
+    });
 }
 
-function renderPhasePeriodList() {
-    const list = document.getElementById('phase-period-list');
-    if (!list) return;
-    if (phasePeriods.length === 0) {
-        list.innerHTML = '<span class="text-muted small">No saved periods.</span>';
-        return;
-    }
-    list.innerHTML = phasePeriods.map(period => `
-        <div class="phase-period-item">
-            <div><strong>${escapeHtml(phaseDisplayName(period.phase))}</strong><br>
-            <small>${escapeHtml(formatPhaseDate(period.start))} – ${escapeHtml(formatPhaseDate(period.end))}</small></div>
-            <button type="button" class="btn btn-sm btn-outline-danger" onclick="deletePhasePeriod(${period.id})" aria-label="Delete phase period">
-                <i class="fas fa-trash"></i>
-            </button>
-        </div>
-    `).join('');
+function renderPhaseCalendar() {
+    renderPhaseCalendarGrid('phase-calendar-grid', 'phase-calendar-title', phaseCalendarMonth, 'chart');
 }
 
-async function addPhasePeriod() {
-    const phase = document.getElementById('phase-period-type')?.value;
-    const start = document.getElementById('phase-period-start')?.value;
-    const end = document.getElementById('phase-period-end')?.value;
-    const status = document.getElementById('phase-period-status');
-    if (!start || !end) {
-        if (status) status.textContent = 'Choose both start and end times.';
-        return;
-    }
-    try {
-        await postJson('/phase-periods', { phase, start, end });
-        if (status) status.textContent = 'Period saved.';
-        loadPhasePeriods();
-    } catch (error) {
-        if (status) status.textContent = error.message;
-    }
+function renderTimelapsePhaseCalendar() {
+    renderPhaseCalendarGrid('timelapse-calendar-grid', 'timelapse-calendar-title', timelapseCalendarMonth, 'timelapse');
 }
 
-async function deletePhasePeriod(periodId) {
-    try {
-        const response = await fetch(`${API_BASE}/phase-periods/${periodId}`, { method: 'DELETE' });
-        const data = await parseApiResponse(response);
-        if (!response.ok || data.error) throw new Error(data.error || 'Delete failed');
-        loadPhasePeriods();
-    } catch (error) {
-        const status = document.getElementById('phase-period-status');
-        if (status) status.textContent = error.message;
+function renderPhaseCalendarGrid(gridId, titleId, calendarMonth, selectionMode) {
+    const grid = document.getElementById(gridId);
+    const title = document.getElementById(titleId);
+    if (!grid || !title || !calendarMonth) return;
+
+    title.textContent = calendarMonth.toLocaleDateString('hu-HU', { year: 'numeric', month: 'long' });
+    const weekdays = ['H', 'K', 'Sze', 'Cs', 'P', 'Szo', 'V'];
+    const firstOfMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+    const mondayOffset = (firstOfMonth.getDay() + 6) % 7;
+    const firstCell = new Date(firstOfMonth);
+    firstCell.setDate(firstCell.getDate() - mondayOffset);
+
+    const cells = weekdays.map(day => `<div class="phase-calendar-weekday">${day}</div>`);
+    for (let index = 0; index < 42; index += 1) {
+        const date = new Date(firstCell);
+        date.setDate(firstCell.getDate() + index);
+        const periods = periodsForCalendarDay(date);
+        const phases = new Set(periods.map(period => period.phase));
+        let phaseClass = '';
+        if (phases.size > 1) phaseClass = 'mixed';
+        else if (phases.has('colonization')) phaseClass = 'incubation';
+        else if (phases.has('fruiting')) phaseClass = 'fruiting';
+        const outsideClass = date.getMonth() === calendarMonth.getMonth() ? '' : 'outside-month';
+        const tooltip = periods.length
+            ? periods.map(period => phaseDisplayName(period.phase)).join(' / ')
+            : 'No recorded phase';
+        const dateValue = toCalendarDateValue(date);
+        const selectionClass = calendarSelectionClass(date, selectionMode);
+        const selectFunction = selectionMode === 'chart' ? 'selectChartCalendarDay' : 'selectTimelapseCalendarDay';
+        const selectableAttributes = ` role="button" tabindex="0" data-date="${dateValue}" onclick="${selectFunction}('${dateValue}')" onkeydown="handleCalendarKey(event, '${dateValue}', '${selectionMode}')"`;
+        cells.push(
+            `<div class="phase-calendar-day ${phaseClass} ${outsideClass} ${selectionClass}" title="${escapeHtml(tooltip)}"${selectableAttributes}>${date.getDate()}</div>`
+        );
     }
+    grid.innerHTML = cells.join('');
+}
+
+function toCalendarDateValue(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function calendarSelectionClass(date, selectionMode) {
+    const prefix = selectionMode === 'chart' ? 'chart' : 'timelapse';
+    const startValue = getDashboardDateInputValue(document.getElementById(`${prefix}-start-date`));
+    const endValue = getDashboardDateInputValue(document.getElementById(`${prefix}-end-date`));
+    const dayValue = toCalendarDateValue(date);
+    const startDay = startValue ? startValue.slice(0, 10) : '';
+    const endDay = endValue ? endValue.slice(0, 10) : '';
+    if (dayValue === startDay) return 'selected-start';
+    if (dayValue === endDay) return 'selected-end';
+    if (startDay && endDay && dayValue > startDay && dayValue < endDay) return 'selected-range';
+    return '';
+}
+
+function selectTimelapseCalendarDay(dateValue) {
+    const startInput = document.getElementById('timelapse-start-date');
+    const endInput = document.getElementById('timelapse-end-date');
+    if (!startInput || !endInput) return;
+
+    if (timelapseCalendarSelection === 'start') {
+        setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+        setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
+        timelapseCalendarSelection = 'end';
+    } else {
+        const startDay = getDashboardDateInputValue(startInput).slice(0, 10);
+        if (dateValue < startDay) {
+            setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
+        } else {
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
+            timelapseCalendarSelection = 'start';
+            closePhaseCalendarPopups();
+        }
+    }
+    renderTimelapsePhaseCalendar();
+}
+
+function selectChartCalendarDay(dateValue) {
+    const startInput = document.getElementById('chart-start-date');
+    const endInput = document.getElementById('chart-end-date');
+    if (!startInput || !endInput) return;
+
+    if (chartCalendarSelection === 'start') {
+        setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+        const endValue = getDashboardDateInputValue(endInput);
+        if (!endValue || endValue.slice(0, 10) < dateValue) {
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
+        }
+        chartCalendarSelection = 'end';
+    } else {
+        const startDay = getDashboardDateInputValue(startInput).slice(0, 10);
+        if (!startDay || dateValue < startDay) {
+            setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
+        } else {
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
+            chartCalendarSelection = 'start';
+            closePhaseCalendarPopups();
+        }
+    }
+    renderPhaseCalendar();
+}
+
+function handleCalendarKey(event, dateValue, selectionMode) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    if (selectionMode === 'chart') selectChartCalendarDay(dateValue);
+    else selectTimelapseCalendarDay(dateValue);
+}
+
+function shiftPhaseCalendarMonth(offset) {
+    if (!phaseCalendarMonth) phaseCalendarMonth = new Date();
+    phaseCalendarMonth = new Date(
+        phaseCalendarMonth.getFullYear(),
+        phaseCalendarMonth.getMonth() + offset,
+        1
+    );
+    renderPhaseCalendar();
+}
+
+function shiftTimelapseCalendarMonth(offset) {
+    if (!timelapseCalendarMonth) timelapseCalendarMonth = new Date();
+    timelapseCalendarMonth = new Date(
+        timelapseCalendarMonth.getFullYear(),
+        timelapseCalendarMonth.getMonth() + offset,
+        1
+    );
+    renderTimelapsePhaseCalendar();
 }
 
 /**
@@ -1388,8 +1673,12 @@ function saveGrowthPhase() {
             alert('Error: ' + data.error);
             return;
         }
-        alert('Phase updated successfully!');
+        updateGrowthPhaseUi(select.value === 'stopped');
+        alert(select.value === 'stopped'
+            ? 'System stopped. The server remains available, but data collection and image capture are disabled.'
+            : 'Phase updated successfully!');
         loadPhasePeriods();
+        checkSystemStatus();
     })
     .catch(error => {
         alert('Error updating phase: ' + error);
@@ -1461,47 +1750,79 @@ function loadInitialData() {
  */
 function checkSystemStatus() {
     if (!navigator.onLine) {
-        const statusBadge = document.getElementById('status-badge');
-        const statusText = document.getElementById('system-status');
-
-        if (statusBadge) {
-            statusBadge.className = 'badge bg-warning ms-2';
-            statusBadge.textContent = 'Offline';
-        }
-        if (statusText) {
-            statusText.textContent = 'Network offline';
-        }
+        updateNetworkStatusUI();
         return;
     }
 
     fetch(`${API_BASE}/health`)
         .then(response => response.json())
         .then(data => {
-            const statusBadge = document.getElementById('status-badge');
-            const statusText = document.getElementById('system-status');
-
-            if (data.status === 'ok') {
-                statusBadge.className = 'badge bg-success ms-2';
-                statusBadge.textContent = 'Online';
-                statusText.textContent = data.background_running ? 'Running normally' : 'Idle';
-            } else {
-                statusBadge.className = 'badge bg-danger ms-2';
-                statusBadge.textContent = 'Offline';
-                statusText.textContent = 'System offline';
+            if (data.status !== 'ok') {
+                setNavbarSystemStatus({
+                    title: 'Attention needed',
+                    detail: 'The server reported an error',
+                    badge: 'Error',
+                    tone: 'warning',
+                    icon: 'fa-triangle-exclamation'
+                });
+                return;
             }
+
+            if (!data.background_running) {
+                setNavbarSystemStatus({
+                    title: 'Automation idle',
+                    detail: 'Server online, background tasks are not running',
+                    badge: 'Idle',
+                    tone: 'warning',
+                    icon: 'fa-circle-exclamation'
+                });
+                return;
+            }
+
+            if (!data.data_collection_active || data.growth_phase === 'stopped') {
+                setNavbarSystemStatus({
+                    title: 'System paused',
+                    detail: 'Server online, data collection off',
+                    badge: 'Stopped',
+                    tone: 'paused',
+                    icon: 'fa-pause'
+                });
+                return;
+            }
+
+            const isIncubation = data.growth_phase === 'colonization';
+            setNavbarSystemStatus({
+                title: isIncubation ? 'Incubation active' : 'Fruiting active',
+                detail: 'Sensors, control and image capture are running',
+                badge: 'Active',
+                tone: 'active',
+                icon: isIncubation ? 'fa-seedling' : 'fa-leaf'
+            });
         })
-        .catch(error => {
-            const statusBadge = document.getElementById('status-badge');
-            const statusText = document.getElementById('system-status');
-
-            if (statusBadge) {
-                statusBadge.className = 'badge bg-danger ms-2';
-                statusBadge.textContent = 'Offline';
-            }
-            if (statusText) {
-                statusText.textContent = 'Connection error';
-            }
+        .catch(() => {
+            setNavbarSystemStatus({
+                title: 'Server unavailable',
+                detail: 'Could not reach GombaBox',
+                badge: 'Offline',
+                tone: 'offline',
+                icon: 'fa-plug-circle-xmark'
+            });
         });
+}
+
+function setNavbarSystemStatus({ title, detail, badge, tone, icon }) {
+    const container = document.getElementById('navbar-system-status');
+    const statusText = document.getElementById('system-status');
+    const detailText = document.getElementById('system-status-detail');
+    const statusBadge = document.getElementById('status-badge');
+    const statusIcon = document.getElementById('status-icon');
+    if (!container || !statusText || !detailText || !statusBadge || !statusIcon) return;
+
+    container.className = `navbar-system-status status-${tone}`;
+    statusText.textContent = title;
+    detailText.textContent = detail;
+    statusBadge.textContent = badge;
+    statusIcon.className = `fas ${icon}`;
 }
 
 /**
@@ -1671,8 +1992,8 @@ function exportAnalyticsReport() {
 /**
  * Capture image now
  */
-function captureNow() {
-    const button = event.target.closest('button');
+function captureNow(event) {
+    const button = event.currentTarget;
     const originalText = button.innerHTML;
     button.disabled = true;
     button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Capturing...';
@@ -1729,7 +2050,6 @@ function updateCharts() {
         coverageChart.data.datasets[0].data = sensorHistory.coverage;
         coverageChart.update('none');
     }
-    renderPhaseHelp();
 }
 
 function loadCoverageComparison() {

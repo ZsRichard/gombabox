@@ -9,8 +9,8 @@
   "display": "standalone",
   "orientation": "portrait-primary",
   "prefer_related_applications": false,
-  "background_color": "#ecf0f1",
-  "theme_color": "#2ecc71",
+  "background_color": "#f3efe6",
+  "theme_color": "#46543c",
   "icons": [
     {
       "src": "/static/icons/icon-192.png",

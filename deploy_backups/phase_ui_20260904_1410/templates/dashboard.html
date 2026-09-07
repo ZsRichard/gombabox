@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#2ecc71">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="GombaBox">
+    <title>GombaBox - Mushroom Growing System</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Custom Styles -->
+    <link href="/static/css/styles.css" rel="stylesheet">
+    <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark sticky-top">
+        <div class="container-lg">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-mushroom"></i> GombaBox
+            </a>
+            <button id="install-app-btn" class="btn btn-outline-light btn-sm d-none" type="button">
+                <i class="fas fa-mobile-screen"></i> Install
+            </button>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-lg mt-4">
+        <div id="network-alert" class="alert alert-custom alert-warning-custom d-none" role="alert">
+            <i class="fas fa-wifi"></i> You are offline. Live data updates are paused.
+        </div>
+
+        <!-- System Status Alert -->
+        <div id="status-alert" class="alert alert-custom alert-info-custom" role="alert">
+            <i class="fas fa-info-circle"></i> System Status: <span id="system-status">Loading...</span>
+            <span class="badge bg-success ms-2" id="status-badge">Online</span>
+        </div>
+
+        <!-- Main Tabs -->
+        <ul class="nav nav-tabs" role="tablist">
+            <li class="nav-item">
+                <a class="nav-link active" data-bs-toggle="tab" href="#dashboard-tab">Dashboard</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#controls-tab">Controls</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#settings-tab">Settings</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#logs-tab">Logs</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#database-tab">Database</a>
+            </li>
+        </ul>
+
+        <!-- Tab Content -->
+        <div class="tab-content">
+            <!-- Dashboard Tab -->
+            <div id="dashboard-tab" class="tab-pane fade show active">
+                <!-- Current Sensors Row -->
+                <div class="row mt-4">
+                    <div class="col-md-6 col-lg-3">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-thermometer-half"></i> Temperature
+                            </div>
+                            <div class="card-body text-center">
+                                <div class="sensor-value" id="temp-value">--</div>
+                                <div class="sensor-unit">°C</div>
+                                <div class="sensor-label">Current Reading</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6 col-lg-3">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-water"></i> Humidity
+                            </div>
+                            <div class="card-body text-center">
+                                <div class="sensor-value" id="hum-value">--</div>
+                                <div class="sensor-unit">%</div>
+                                <div class="sensor-label">Current Reading</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6 col-lg-3">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-cloud"></i> CO₂ Level
+                            </div>
+                            <div class="card-body text-center">
+                                <div class="sensor-value" id="co2-value">--</div>
+                                <div class="sensor-unit">ppm</div>
+                                <div class="sensor-label">Current Reading</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6 col-lg-3">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-sun"></i> Light Level
+                            </div>
+                            <div class="card-body text-center">
+                                <div class="sensor-value" id="light-value">--</div>
+                                <div class="sensor-unit">lux</div>
+                                <div class="sensor-label">Current Reading</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mycelium Coverage Row -->
+                <div class="row mt-4">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-image"></i> Latest Capture
+                            </div>
+                            <div class="card-body text-center">
+                                  <img id="latest-capture" src="/static/icons/icon.svg" alt="Latest image" 
+                                      class="img-fluid latest-capture-img">
+                                <div class="mt-3">
+                                    <strong>Mycelium Coverage:</strong>
+                                    <div class="progress mt-2">
+                                        <div id="coverage-bar" class="progress-bar bg-success" role="progressbar" 
+                                             style="width: 0%"></div>
+                                    </div>
+                                    <span id="coverage-percentage">0%</span>
+                                </div>                                <div class="mt-3">
+                                    <button class="btn btn-primary" onclick="captureNow()">
+                                        <i class="fas fa-camera"></i> Capture Now
+                                    </button>
+                                </div>                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Timelapse Creator -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-film"></i> Timelapse Creator
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3 align-items-end">
+                                    <div class="col-md-3">
+                                        <label for="timelapse-start-date" class="form-label">Start time</label>
+                                        <input type="datetime-local" class="form-control" id="timelapse-start-date">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="timelapse-end-date" class="form-label">End time</label>
+                                        <input type="datetime-local" class="form-control" id="timelapse-end-date">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="timelapse-fps" class="form-label">FPS</label>
+                                        <input type="number" min="1" max="60" step="1" value="15" class="form-control" id="timelapse-fps">
+                                    </div>
+                                    <div class="col-md-3 d-flex">
+                                        <button class="btn btn-primary w-100" id="generate-timelapse-btn" onclick="generateTimelapse()">
+                                            <i class="fas fa-wand-magic-sparkles"></i> Build
+                                        </button>
+                                    </div>
+                                </div>
+                                <div id="media-export-status" class="alert alert-custom alert-info-custom mt-3 d-none"></div>
+                                <div id="timelapse-result" class="alert alert-custom alert-info-custom mt-3 d-none">
+                                    Timelapse ready:
+                                    <a id="timelapse-link" href="#" target="_blank" rel="noopener">Open video</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Time Range Selector -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-body">
+                                <label for="time-range-select" class="form-label">
+                                    <i class="fas fa-calendar"></i> Chart Time Range
+                                </label>
+                                <div class="btn-group flex-wrap" role="group">
+                                    <input type="radio" class="btn-check" name="time-range" id="time-1h" value="1" checked>
+                                    <label class="btn btn-outline-primary" for="time-1h">1 Hour</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-6h" value="6">
+                                    <label class="btn btn-outline-primary" for="time-6h">6 Hours</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-24h" value="24">
+                                    <label class="btn btn-outline-primary" for="time-24h">24 Hours</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-7d" value="168">
+                                    <label class="btn btn-outline-primary" for="time-7d">7 Days</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-30d" value="720">
+                                    <label class="btn btn-outline-primary" for="time-30d">30 Days</label>
+
+                                    <input type="radio" class="btn-check" name="time-range" id="time-custom" value="custom">
+                                    <label class="btn btn-outline-primary" for="time-custom">Custom</label>
+                                </div>
+                                <div id="custom-chart-range" class="row g-2 align-items-end mt-2 d-none">
+                                    <div class="col-md-5">
+                                        <label for="chart-start-date" class="form-label mb-1">From</label>
+                                        <input type="datetime-local" class="form-control" id="chart-start-date">
+                                    </div>
+                                    <div class="col-md-5">
+                                        <label for="chart-end-date" class="form-label mb-1">To</label>
+                                        <input type="datetime-local" class="form-control" id="chart-end-date">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <button type="button" class="btn btn-primary w-100" id="apply-chart-range">Apply</button>
+                                    </div>
+                                </div>
+                                <div class="phase-help mt-3" id="chart-phase-help">
+                                    <span class="phase-legend phase-colonization">Incubation</span>
+                                    <span class="phase-legend phase-fruiting">Fruiting</span>
+                                    <small class="text-muted d-block mt-1" id="chart-range-info">Loading chart data...</small>
+                                    <small class="text-muted d-block mt-1" id="chart-phase-summary">No phase periods recorded yet.</small>
+                                    <div class="phase-calendar mt-3" aria-label="Growth phase calendar">
+                                        <div class="phase-calendar-header">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="phase-calendar-prev" aria-label="Previous month">
+                                                <i class="fas fa-chevron-left"></i>
+                                            </button>
+                                            <strong id="phase-calendar-title"></strong>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="phase-calendar-next" aria-label="Next month">
+                                                <i class="fas fa-chevron-right"></i>
+                                            </button>
+                                        </div>
+                                        <div class="phase-calendar-grid" id="phase-calendar-grid"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Coverage Trend Chart -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-chart-line"></i> Mycelium Coverage Trend
+                            </div>
+                            <div class="card-body">
+                                <div class="chart-container">
+                                    <canvas id="coverage-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Coverage Test Lab -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-flask"></i> Coverage Test Lab
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3 align-items-end">
+                                    <div class="col-md-3">
+                                        <label for="coverage-preview-start" class="form-label">Preview start</label>
+                                        <input type="datetime-local" id="coverage-preview-start" class="form-control">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="coverage-preview-end" class="form-label">Preview end</label>
+                                        <input type="datetime-local" id="coverage-preview-end" class="form-control">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="coverage-preview-sample-hours" class="form-label">Sample every</label>
+                                        <input type="number" id="coverage-preview-sample-hours" class="form-control" min="1" step="1" value="1">
+                                    </div>
+                                    <div class="col-md-12 mt-3">
+                                        <div class="row g-2">
+                                            <div class="col-md-3">
+                                                <label for="coverage-crop-top" class="form-label">Crop top (%)</label>
+                                                <input type="range" id="coverage-crop-top" min="0" max="40" step="1" value="20" class="form-range">
+                                                <small class="form-text text-muted"><span id="coverage-crop-top-val">20</span>%</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label for="coverage-crop-left" class="form-label">Crop left (%)</label>
+                                                <input type="range" id="coverage-crop-left" min="0" max="40" step="1" value="20" class="form-range">
+                                                <small class="form-text text-muted"><span id="coverage-crop-left-val">20</span>%</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label for="coverage-crop-right" class="form-label">Crop right (%)</label>
+                                                <input type="range" id="coverage-crop-right" min="0" max="40" step="1" value="10" class="form-range">
+                                                <small class="form-text text-muted"><span id="coverage-crop-right-val">10</span>%</small>
+                                            </div>
+                                            <div class="col-md-3">
+                                                <label for="coverage-crop-bottom" class="form-label">Crop bottom (%)</label>
+                                                <input type="range" id="coverage-crop-bottom" min="0" max="40" step="1" value="9" class="form-range">
+                                                <small class="form-text text-muted"><span id="coverage-crop-bottom-val">9</span>%</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3 d-flex gap-2">
+                                        <button class="btn btn-outline-secondary flex-fill" type="button" onclick="useCoveragePreviewPreset(1)">1H</button>
+                                        <button class="btn btn-outline-secondary flex-fill" type="button" onclick="useCoveragePreviewPreset(6)">6H</button>
+                                        <button class="btn btn-outline-secondary flex-fill" type="button" onclick="useCoveragePreviewPreset(24)">24H</button>
+                                    </div>
+                                    <div class="col-md-3 d-flex">
+                                        <button class="btn btn-outline-primary w-100" id="coverage-preview-btn" onclick="loadCoverageComparison()">
+                                            <i class="fas fa-rotate"></i> Recalculate preview
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="mt-2">
+                                    <small class="text-muted" id="chart-data-info">Select an interval to test the recalculation.</small>
+                                </div>
+                                <div class="mt-2">
+                                    <small class="text-muted">Higher values sample fewer images and speed up long intervals.</small>
+                                </div>
+                                <div class="chart-container mt-3">
+                                    <canvas id="coverage-test-chart"></canvas>
+                                </div>
+                                <div class="mt-4">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <strong>Original vs Preprocessed Image</strong>
+                                        <small class="text-muted" id="coverage-preview-image-meta">Waiting for preview...</small>
+                                    </div>
+                                    <img id="coverage-preview-image" class="img-fluid rounded border w-100" src="/static/icons/icon.svg" alt="Coverage preprocessing preview">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Time Series Graphs -->
+                <div class="row mt-4">
+                    <div class="col-lg-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-thermometer-half"></i> Temperature Trend
+                            </div>
+                            <div class="card-body">
+                                <div class="chart-container">
+                                    <canvas id="temp-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-tint"></i> Humidity Trend
+                            </div>
+                            <div class="card-body">
+                                <div class="chart-container">
+                                    <canvas id="humidity-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mt-4">
+                    <div class="col-lg-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-cloud"></i> CO₂ Level Trend
+                            </div>
+                            <div class="card-body">
+                                <div class="chart-container">
+                                    <canvas id="co2-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-sun"></i> Light Level Trend
+                            </div>
+                            <div class="card-body">
+                                <div class="chart-container">
+                                    <canvas id="light-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Controls Tab -->
+            <div id="controls-tab" class="tab-pane fade">
+                <div class="row mt-4">
+                    <div class="col-lg-8">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-gamepad"></i> Relay Controls
+                            </div>
+                            <div class="card-body">
+                                <div id="relay-controls">
+                                    <!-- Relay controls will be loaded here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-cog"></i> System Controls
+                            </div>
+                            <div class="card-body">
+                                <button class="btn btn-success w-100 mb-2" onclick="startSystem()">
+                                    <i class="fas fa-play"></i> Start System
+                                </button>
+                                <button class="btn btn-danger w-100" onclick="stopSystem()">
+                                    <i class="fas fa-stop"></i> Stop System
+                                </button>
+                                <button class="btn btn-warning w-100 mt-2" onclick="restartSystem()">
+                                    <i class="fas fa-rotate"></i> Restart Service
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card mt-4">
+                            <div class="card-header">
+                                <i class="fas fa-seedling"></i> Growth Phase
+                            </div>
+                            <div class="card-body">
+                                <label for="growth-phase" class="form-label">Phase</label>
+                                <select id="growth-phase" class="form-select">
+                                    <option value="colonization">Colonization</option>
+                                    <option value="fruiting">Fruiting</option>
+                                </select>
+                                <button class="btn btn-primary w-100 mt-2" onclick="saveGrowthPhase()">
+                                    Save Phase
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settings-tab" class="tab-pane fade">
+                <div class="row mt-4">
+                    <div class="col-lg-8">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-sliders-h"></i> Environment Settings
+                            </div>
+                            <div class="card-body" id="settings-form">
+                                <!-- Settings will be loaded here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logs Tab -->
+            <div id="logs-tab" class="tab-pane fade">
+                <div class="row mt-4">
+                    <div class="col-lg-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-list"></i> System Logs
+                            </div>
+                            <div class="card-body">
+                                <table class="table table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>Timestamp</th>
+                                            <th>Level</th>
+                                            <th>Message</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="logs-table">
+                                        <!-- Logs will be loaded here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Database Tab -->
+            <div id="database-tab" class="tab-pane fade">
+                <div class="row mt-4">
+                    <div class="col-lg-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-database"></i> Database Browser
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3 align-items-end">
+                                    <div class="col-md-4">
+                                        <label class="form-label" for="db-table-select">Table</label>
+                                        <select id="db-table-select" class="form-select"></select>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label" for="db-table-limit">Rows per page</label>
+                                        <select id="db-table-limit" class="form-select">
+                                            <option value="50" selected>50</option>
+                                            <option value="100">100</option>
+                                            <option value="200">200</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <button class="btn btn-primary w-100" id="db-refresh-btn">
+                                            <i class="fas fa-sync"></i> Refresh
+                                        </button>
+                                    </div>
+                                </div>
+                                <div id="db-alert" class="alert alert-warning-custom mt-3" style="display:none"></div>
+                                <div class="table-responsive mt-3">
+                                    <table class="table table-hover" id="db-table">
+                                        <thead id="db-table-head"></thead>
+                                        <tbody id="db-table-body"></tbody>
+                                    </table>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center mt-3">
+                                    <button class="btn btn-outline-secondary" id="db-prev-btn">Prev</button>
+                                    <span id="db-page-info">Page 1</span>
+                                    <button class="btn btn-outline-secondary" id="db-next-btn">Next</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="db-edit-modal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Row</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="db-edit-form"></form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="db-save-btn">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>&copy; 2026 GombaBox - Automated Mushroom Growing System. All rights reserved.</p>
+        <small>Last updated: <span id="last-update">--:--:--</span></small>
+    </footer>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- PWA Diagnostic Panel -->
+    <!-- Frontend JavaScript -->
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

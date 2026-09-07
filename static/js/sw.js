@@ -1,9 +1,10 @@
-const CACHE_NAME = 'gombabox-shell-v3';
+const CACHE_NAME = 'gombabox-shell-v17';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
-  '/static/css/styles.css',
-  '/static/js/dashboard.js',
+  '/static/css/styles.css?v=13',
+  '/static/js/dashboard.js?v=12',
+  '/static/js/notifications.js?v=3',
   '/static/icons/icon.svg',
   '/static/icons/icon-192.png',
   '/static/icons/icon-512.png',
@@ -15,6 +16,20 @@ self.addEventListener('install', (event) => {
     caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
   );
   self.skipWaiting();
+});
+
+self.addEventListener('push', event => {
+  let data = { title: 'GombaBox értesítés', detail: 'Nyisd meg az alkalmazást a részletekhez.' };
+  try { if (event.data) data = { ...data, ...event.data.json() }; } catch { /* Display fallback. */ }
+  event.waitUntil(self.registration.showNotification(data.title, {
+    body: data.detail, icon: '/static/icons/icon-192.png',
+    tag: 'gombabox-' + (data.key || 'status'), data: { url: '/#settings-tab' }
+  }));
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(self.clients.openWindow('/#settings-tab'));
 });
 
 self.addEventListener('activate', (event) => {

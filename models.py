@@ -46,14 +46,15 @@ class CameraCapture(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     timestamp = db.Column(db.DateTime, default=datetime.datetime.now, index=True)
     filename = db.Column(db.String(120), nullable=False)
-    
+    phase = db.Column(db.String(20), nullable=True, index=True)
     analysis_result = db.Column(db.String(200), nullable=True)  # Future: Store mycelium coverage percentage
 
     def to_dict(self):
         return {
             'timestamp': self.timestamp.isoformat(),
             'url': f"/static/captures/{self.filename}",
-            'analysis': self.analysis_result
+            'analysis': self.analysis_result,
+            'phase': self.phase
         }
 
 class Setting(db.Model):

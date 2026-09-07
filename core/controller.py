@@ -60,6 +60,10 @@ class MushroomController:
         """
         Main cycle with independent time bases for sensing, control, and camera.
         """
+        if self._get_growth_phase() == 'stopped':
+            self._ensure_stopped_mode()
+            return
+
         now = time.monotonic()
 
         sensor_interval_s = max(1, int(Config.get('sensor_sample_interval_s')))
@@ -84,6 +88,9 @@ class MushroomController:
         Sensor cycle.
         Measure -> Save
         """
+        if self._get_growth_phase() == 'stopped':
+            return
+
         try:
             sensor_data = self.sensors.read_all()
             self._latest_sensor_data = sensor_data
@@ -101,7 +108,10 @@ class MushroomController:
         """
         try:
             phase = self._get_growth_phase()
-            if phase == 'colonization':
+            if phase == 'stopped':
+                self._ensure_stopped_mode()
+                return
+            elif phase == 'colonization':
                 self._ensure_colonization_mode()
             else:
                 self._control_humidity(sensor_data.get('hum', 0))
@@ -119,6 +129,9 @@ class MushroomController:
         Visual inspection cycle (e.g., runs hourly).
         Photograph -> Analyze -> Save
         """
+        if self._get_growth_phase() == 'stopped':
+            return
+
         logger.info("Visual inspection started.")
         try:
             # 1. Image capture (Driver saves to filesystem)
@@ -282,6 +295,18 @@ class MushroomController:
             self.relays.set_state(RELAY_ID_LIGHT, False)
             self._log_system_event("INFO", "Light OFF (Colonization phase)")
 
+    def _ensure_stopped_mode(self):
+        """Keep every actuator off without reading sensors or writing measurements."""
+        self._fan_pulse_end_at = 0.0
+        self._fan_next_allowed_pulse_at = 0.0
+        self._humidifier_pulse_end_at = 0.0
+        self._humidifier_next_allowed_pulse_at = 0.0
+        self.relays.camera_capture_active = False
+
+        for relay_id in (RELAY_ID_FAN, RELAY_ID_HUMIDIFIER, RELAY_ID_LIGHT):
+            if self.relays.get_state(relay_id):
+                self.relays.set_state(relay_id, False)
+
     def _prepare_camera_light(self):
         """Turn on LED and wait for camera to focus before capture.
         
@@ -335,9 +360,11 @@ class MushroomController:
     def _save_camera_capture(self, filepath, coverage):
         """Save image metadata."""
         filename = os.path.basename(filepath)
+        phase = self._get_growth_phase()
         capture = CameraCapture(
             filename=filename,
-            analysis_result=f"{coverage}%"  # Could optionally store as float
+            analysis_result=f"{coverage}%",  # Could optionally store as float
+            phase='incubation' if phase == 'colonization' else 'fruiting' if phase == 'fruiting' else None
         )
         self.db.add(capture)
 

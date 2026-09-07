@@ -32,6 +32,7 @@ import shutil
 import tempfile
 from flask import Flask, jsonify, render_template, request, send_file, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import func, inspect, or_, text
 
 # Database
 from models import db, Measurement, CameraCapture, SystemLog, Setting, GrowthPhasePeriod
@@ -83,8 +84,8 @@ DB_TABLES = {
     'camera_captures': {
         'model': CameraCapture,
         'id_field': 'id',
-        'columns': ['id', 'timestamp', 'filename', 'analysis_result'],
-        'editable': ['filename', 'analysis_result'],
+        'columns': ['id', 'timestamp', 'filename', 'analysis_result', 'phase'],
+        'editable': ['filename', 'analysis_result', 'phase'],
         'order_by': CameraCapture.timestamp.desc()
     },
     'system_logs': {
@@ -318,6 +319,22 @@ def _evenly_sample(items, limit=CHART_HISTORY_MAX_POINTS):
         return items[:limit]
     last = len(items) - 1
     return [items[round(index * last / (limit - 1))] for index in range(limit)]
+
+
+def _ensure_runtime_schema():
+    """Apply small backward-compatible SQLite schema additions."""
+    columns = {
+        column['name'] for column in inspect(db.engine).get_columns('camera_captures')
+    }
+    if 'phase' not in columns:
+        with db.engine.begin() as connection:
+            connection.execute(text(
+                'ALTER TABLE camera_captures ADD COLUMN phase VARCHAR(20)'
+            ))
+            connection.execute(text(
+                'CREATE INDEX IF NOT EXISTS ix_camera_captures_phase '
+                'ON camera_captures (phase)'
+            ))
 
 
 def _normalize_capture_directory(capture_dir):
@@ -738,10 +755,34 @@ def get_measurements_history():
         total_count = measurements_query.count()
         if total_count > CHART_HISTORY_MAX_POINTS:
             stride = (total_count + CHART_HISTORY_MAX_POINTS - 1) // CHART_HISTORY_MAX_POINTS
-            measurements_query = measurements_query.filter(Measurement.id % stride == 0)
-        measurements = measurements_query.order_by(
-            Measurement.timestamp.asc()
-        ).limit(CHART_HISTORY_MAX_POINTS).all()
+            ranked_measurements = db.session.query(
+                Measurement.id.label('measurement_id'),
+                func.row_number().over(
+                    order_by=(Measurement.timestamp.asc(), Measurement.id.asc())
+                ).label('sample_row')
+            ).filter(
+                Measurement.timestamp >= start_dt,
+                Measurement.timestamp <= end_dt
+            ).subquery()
+
+            # Sample relative to the selected time window, not to global database IDs.
+            # Keeping row 1 and the final row guarantees that the chart represents
+            # both exact ends of the requested interval.
+            measurements = Measurement.query.join(
+                ranked_measurements,
+                Measurement.id == ranked_measurements.c.measurement_id
+            ).filter(
+                or_(
+                    (ranked_measurements.c.sample_row - 1) % stride == 0,
+                    ranked_measurements.c.sample_row == total_count
+                )
+            ).order_by(
+                Measurement.timestamp.asc(), Measurement.id.asc()
+            ).limit(CHART_HISTORY_MAX_POINTS).all()
+        else:
+            measurements = measurements_query.order_by(
+                Measurement.timestamp.asc(), Measurement.id.asc()
+            ).all()
 
         return jsonify({
             'measurements': [m.to_dict() for m in measurements],
@@ -779,7 +820,8 @@ def get_camera_history():
                 capture_path = resolve_capture_file_path(capture.filename)
             capture_data.append({
                 'time': capture.timestamp.strftime('%Y-%m-%d %H:%M'),
-                'analysis': _capture_analysis_value(capture, capture_path)
+                'analysis': _capture_analysis_value(capture, capture_path),
+                'phase': capture.phase
             })
         
         return jsonify({
@@ -1306,13 +1348,17 @@ def growth_phase():
     try:
         if request.method == 'GET':
             phase = str(Config.get('growth_phase') or 'fruiting').strip().lower()
-            return jsonify({'phase': phase, 'allowed': ['colonization', 'fruiting']})
+            return jsonify({
+                'phase': phase,
+                'allowed': ['colonization', 'fruiting', 'stopped'],
+                'data_collection_active': phase != 'stopped'
+            })
 
         if not request.json or 'phase' not in request.json:
             return jsonify({'error': 'Missing phase parameter'}), 400
 
         phase = str(request.json.get('phase')).strip().lower()
-        if phase not in ['colonization', 'fruiting']:
+        if phase not in ['colonization', 'fruiting', 'stopped']:
             return jsonify({'error': 'Invalid phase value'}), 400
 
         previous_phase = str(Config.get('growth_phase') or '').strip().lower()
@@ -1322,11 +1368,12 @@ def growth_phase():
             GrowthPhasePeriod.query.filter_by(end_time=None).update(
                 {'end_time': changed_at}, synchronize_session=False
             )
-            db.session.add(GrowthPhasePeriod(
-                phase=phase,
-                start_time=changed_at,
-                end_time=None
-            ))
+            if phase != 'stopped':
+                db.session.add(GrowthPhasePeriod(
+                    phase=phase,
+                    start_time=changed_at,
+                    end_time=None
+                ))
             db.session.add(SystemLog(
                 level='INFO',
                 message=f"Growth phase changed from {previous_phase or 'unknown'} to {phase}"
@@ -1427,6 +1474,8 @@ def relay_control(relay_id):
             return jsonify({'error': 'Missing state parameter'}), 400
         
         state = bool(request.json.get('state'))
+        if state and str(Config.get('growth_phase') or '').strip().lower() == 'stopped':
+            return jsonify({'error': 'Relay control is disabled while the system is stopped'}), 409
         relay_driver.set_state(relay_id, state)
         logger.info(f"Manual relay control: Relay {relay_id} set to {'ON' if state else 'OFF'}")
         return jsonify({'relay_id': relay_id, 'state': state})
@@ -1439,11 +1488,44 @@ def relay_control(relay_id):
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint."""
+    phase = str(Config.get('growth_phase') or 'fruiting').strip().lower()
     return jsonify({
         'status': 'ok',
         'mode': 'mock' if USE_MOCK_HARDWARE else 'hardware',
-        'background_running': task_manager.is_running()
+        'background_running': task_manager.is_running(),
+        'growth_phase': phase,
+        'data_collection_active': phase != 'stopped'
     })
+
+
+def notification_snapshot():
+    now = datetime.datetime.now()
+    measurement = Measurement.query.order_by(Measurement.timestamp.desc()).first()
+    capture = CameraCapture.query.order_by(CameraCapture.timestamp.desc()).first()
+    return {
+        'phase': str(Config.get('growth_phase') or 'fruiting'),
+        'running': task_manager.is_running(),
+        'measurement': measurement.to_dict() if measurement else {},
+        'measurement_age_seconds': max(0, (now - measurement.timestamp).total_seconds()) if measurement else None,
+        'capture_age_seconds': max(0, (now - capture.timestamp).total_seconds()) if capture else None,
+        'sample_interval_seconds': float(Config.get('sensor_sample_interval_s') or 60),
+        'camera_interval_seconds': float(Config.get('camera_interval') or 60) * 60,
+        'target_temp': float(Config.get('target_temp') or 24),
+        'target_humidity': float(Config.get('target_humidity') or 90),
+    }
+    
+
+@app.route('/api/notifications/status', methods=['GET'])
+def notification_status():
+    from core.notification_rules import evaluate_snapshot
+    snapshot = notification_snapshot()
+    try:
+        margins = [float(request.args.get(k, d)) for k, d in [('temp_margin', 2), ('humidity_margin', 10), ('co2_limit', 1500)]]
+        if not all(__import__('math').isfinite(v) for v in margins) or not (0.1 <= margins[0] <= 20 and 1 <= margins[1] <= 100 and 400 <= margins[2] <= 10000):
+            raise ValueError()
+    except (ValueError, TypeError):
+        return jsonify(error='Invalid notification thresholds'), 400
+    return jsonify(phase=snapshot['phase'], alerts=evaluate_snapshot(snapshot, *margins))
 
 
 @app.route('/api/start', methods=['POST'])
@@ -1484,6 +1566,9 @@ def restart_system():
 def capture_now():
     """Trigger manual camera capture."""
     try:
+        if str(Config.get('growth_phase') or '').strip().lower() == 'stopped':
+            return jsonify({'error': 'Image capture is disabled while the system is stopped'}), 409
+
         from drivers.camera import RealCameraDriver, MockCameraDriver
         from core.vision import ImageAnalyzer
         
@@ -1526,7 +1611,8 @@ def capture_now():
         filename = os.path.basename(image_path)
         capture = CameraCapture(
             filename=filename,
-            analysis_result=f"{coverage_percent}%"
+            analysis_result=f"{coverage_percent}%",
+            phase='incubation' if str(Config.get('growth_phase')).lower() == 'colonization' else 'fruiting'
         )
         db.session.add(capture)
         db.session.commit()
@@ -1659,12 +1745,13 @@ def create_timelapse():
         return jsonify({'error': 'Failed to create timelapse'}), 500
 
 
-# Flask Application Startup
-# Flask Application Startup
+from core.web_push import install_web_push
+push_monitor = install_web_push(app, notification_snapshot)
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+        _ensure_runtime_schema()
         logger.info("Database initialized.")
     
     # Start background task manager
@@ -1672,6 +1759,7 @@ if __name__ == '__main__':
 
     # Start database backup manager
     backup_manager.start()
+    push_monitor.start()
     
     # Start Flask server
     logger.info(f"Starting Flask server on {API_HOST}:{API_PORT}")

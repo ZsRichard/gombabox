@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#2ecc71">
+    <meta name="theme-color" content="#46543c">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="GombaBox">
@@ -14,7 +14,7 @@
     <!-- Font Awesome Icons -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <!-- Custom Styles -->
-    <link href="/static/css/styles.css" rel="stylesheet">
+    <link href="/static/css/styles.css?v=13" rel="stylesheet">
     <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
     <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
     <link rel="manifest" href="/manifest.webmanifest">
@@ -28,28 +28,29 @@
             <a class="navbar-brand" href="/">
                 <i class="fas fa-mushroom"></i> GombaBox
             </a>
-            <button id="install-app-btn" class="btn btn-outline-light btn-sm d-none" type="button">
-                <i class="fas fa-mobile-screen"></i> Install
-            </button>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
+            <div class="navbar-actions">
+                <button type="button" id="notification-indicator" class="navbar-notification status-unknown"
+                        aria-label="Értesítési beállítások" title="Értesítési beállítások">
+                    <span class="navbar-notification-icon" aria-hidden="true">
+                        <i id="notification-indicator-icon" class="fas fa-bell"></i>
+                    </span>
+                    <span id="notification-indicator-count" class="navbar-notification-count d-none" aria-hidden="true">0</span>
+                </button>
+                <div id="navbar-system-status" class="navbar-system-status status-loading" role="status" aria-live="polite">
+                    <span class="navbar-status-icon" aria-hidden="true">
+                        <i id="status-icon" class="fas fa-spinner fa-spin"></i>
+                    </span>
+                    <span class="navbar-status-copy">
+                        <strong id="system-status">Checking system</strong>
+                        <small id="system-status-detail">Connecting to GombaBox</small>
+                    </span>
+                    <span class="navbar-status-badge" id="status-badge">Checking</span>
+                </div>
             </div>
         </div>
     </nav>
 
     <div class="container-lg mt-4">
-        <div id="network-alert" class="alert alert-custom alert-warning-custom d-none" role="alert">
-            <i class="fas fa-wifi"></i> You are offline. Live data updates are paused.
-        </div>
-
-        <!-- System Status Alert -->
-        <div id="status-alert" class="alert alert-custom alert-info-custom" role="alert">
-            <i class="fas fa-info-circle"></i> System Status: <span id="system-status">Loading...</span>
-            <span class="badge bg-success ms-2" id="status-badge">Online</span>
-        </div>
-
         <!-- Main Tabs -->
         <ul class="nav nav-tabs" role="tablist">
             <li class="nav-item">
@@ -73,10 +74,10 @@
         <div class="tab-content">
             <!-- Dashboard Tab -->
             <div id="dashboard-tab" class="tab-pane fade show active">
-                <!-- Current Sensors Row -->
-                <div class="row mt-4">
-                    <div class="col-md-6 col-lg-3">
-                        <div class="card">
+                <!-- Desktop overview: sensors around the latest capture -->
+                <div class="row g-4 mt-1 dashboard-overview align-items-stretch">
+                    <div class="col-12 col-lg-3 sensor-stack">
+                        <div class="card sensor-card temperature-card">
                             <div class="card-header">
                                 <i class="fas fa-thermometer-half"></i> Temperature
                             </div>
@@ -86,9 +87,7 @@
                                 <div class="sensor-label">Current Reading</div>
                             </div>
                         </div>
-                    </div>
-                    <div class="col-md-6 col-lg-3">
-                        <div class="card">
+                        <div class="card sensor-card humidity-card">
                             <div class="card-header">
                                 <i class="fas fa-water"></i> Humidity
                             </div>
@@ -99,8 +98,34 @@
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-6 col-lg-3">
-                        <div class="card">
+
+                    <div class="col-12 col-lg-6">
+                        <div class="card capture-card h-100">
+                            <div class="card-header">
+                                <i class="fas fa-image"></i> Latest Capture
+                            </div>
+                            <div class="card-body text-center d-flex flex-column">
+                                <img id="latest-capture" src="/static/icons/icon.svg" alt="Latest image"
+                                     class="img-fluid latest-capture-img">
+                                <div class="mt-3">
+                                    <strong>Mycelium Coverage:</strong>
+                                    <div class="progress mt-2">
+                                        <div id="coverage-bar" class="progress-bar bg-success" role="progressbar"
+                                             style="width: 0%"></div>
+                                    </div>
+                                    <span id="coverage-percentage">0%</span>
+                                </div>
+                                <div class="mt-3">
+                                    <button class="btn btn-primary" id="capture-now-btn" onclick="captureNow(event)">
+                                        <i class="fas fa-camera"></i> Capture Now
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-12 col-lg-3 sensor-stack">
+                        <div class="card sensor-card co2-card">
                             <div class="card-header">
                                 <i class="fas fa-cloud"></i> CO₂ Level
                             </div>
@@ -110,9 +135,7 @@
                                 <div class="sensor-label">Current Reading</div>
                             </div>
                         </div>
-                    </div>
-                    <div class="col-md-6 col-lg-3">
-                        <div class="card">
+                        <div class="card sensor-card light-card">
                             <div class="card-header">
                                 <i class="fas fa-sun"></i> Light Level
                             </div>
@@ -121,32 +144,6 @@
                                 <div class="sensor-unit">lux</div>
                                 <div class="sensor-label">Current Reading</div>
                             </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Mycelium Coverage Row -->
-                <div class="row mt-4">
-                    <div class="col-md-6">
-                        <div class="card">
-                            <div class="card-header">
-                                <i class="fas fa-image"></i> Latest Capture
-                            </div>
-                            <div class="card-body text-center">
-                                  <img id="latest-capture" src="/static/icons/icon.svg" alt="Latest image" 
-                                      class="img-fluid latest-capture-img">
-                                <div class="mt-3">
-                                    <strong>Mycelium Coverage:</strong>
-                                    <div class="progress mt-2">
-                                        <div id="coverage-bar" class="progress-bar bg-success" role="progressbar" 
-                                             style="width: 0%"></div>
-                                    </div>
-                                    <span id="coverage-percentage">0%</span>
-                                </div>                                <div class="mt-3">
-                                    <button class="btn btn-primary" onclick="captureNow()">
-                                        <i class="fas fa-camera"></i> Capture Now
-                                    </button>
-                                </div>                            </div>
                         </div>
                     </div>
                 </div>
@@ -162,11 +159,11 @@
                                 <div class="row g-3 align-items-end">
                                     <div class="col-md-3">
                                         <label for="timelapse-start-date" class="form-label">Start time</label>
-                                        <input type="datetime-local" class="form-control" id="timelapse-start-date">
+                                        <input type="text" class="form-control custom-calendar-input" id="timelapse-start-date" readonly autocomplete="off" aria-haspopup="dialog">
                                     </div>
                                     <div class="col-md-3">
                                         <label for="timelapse-end-date" class="form-label">End time</label>
-                                        <input type="datetime-local" class="form-control" id="timelapse-end-date">
+                                        <input type="text" class="form-control custom-calendar-input" id="timelapse-end-date" readonly autocomplete="off" aria-haspopup="dialog">
                                     </div>
                                     <div class="col-md-3">
                                         <label for="timelapse-fps" class="form-label">FPS</label>
@@ -182,6 +179,23 @@
                                 <div id="timelapse-result" class="alert alert-custom alert-info-custom mt-3 d-none">
                                     Timelapse ready:
                                     <a id="timelapse-link" href="#" target="_blank" rel="noopener">Open video</a>
+                                </div>
+                                <div class="phase-help mt-3">
+                                    <span class="phase-legend phase-colonization">Incubation</span>
+                                    <span class="phase-legend phase-fruiting">Fruiting</span>
+                                    <small class="text-muted d-block mt-1">Select the start day, then the end day.</small>
+                                    <div class="phase-calendar phase-calendar-popup mt-3" id="timelapse-calendar-popup" aria-label="Timelapse growth phase calendar" aria-hidden="true">
+                                        <div class="phase-calendar-header">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="timelapse-calendar-prev" aria-label="Previous timelapse month">
+                                                <i class="fas fa-chevron-left"></i>
+                                            </button>
+                                            <strong id="timelapse-calendar-title"></strong>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="timelapse-calendar-next" aria-label="Next timelapse month">
+                                                <i class="fas fa-chevron-right"></i>
+                                            </button>
+                                        </div>
+                                        <div class="phase-calendar-grid" id="timelapse-calendar-grid"></div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -218,11 +232,11 @@
                                 <div id="custom-chart-range" class="row g-2 align-items-end mt-2 d-none">
                                     <div class="col-md-5">
                                         <label for="chart-start-date" class="form-label mb-1">From</label>
-                                        <input type="datetime-local" class="form-control" id="chart-start-date">
+                                        <input type="text" class="form-control custom-calendar-input" id="chart-start-date" readonly autocomplete="off" aria-haspopup="dialog">
                                     </div>
                                     <div class="col-md-5">
                                         <label for="chart-end-date" class="form-label mb-1">To</label>
-                                        <input type="datetime-local" class="form-control" id="chart-end-date">
+                                        <input type="text" class="form-control custom-calendar-input" id="chart-end-date" readonly autocomplete="off" aria-haspopup="dialog">
                                     </div>
                                     <div class="col-md-2">
                                         <button type="button" class="btn btn-primary w-100" id="apply-chart-range">Apply</button>
@@ -232,7 +246,18 @@
                                     <span class="phase-legend phase-colonization">Incubation</span>
                                     <span class="phase-legend phase-fruiting">Fruiting</span>
                                     <small class="text-muted d-block mt-1" id="chart-range-info">Loading chart data...</small>
-                                    <small class="text-muted d-block mt-1" id="chart-phase-summary">No phase periods recorded yet.</small>
+                                    <div class="phase-calendar phase-calendar-popup mt-3" id="chart-calendar-popup" aria-label="Growth phase calendar" aria-hidden="true">
+                                        <div class="phase-calendar-header">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="phase-calendar-prev" aria-label="Previous month">
+                                                <i class="fas fa-chevron-left"></i>
+                                            </button>
+                                            <strong id="phase-calendar-title"></strong>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="phase-calendar-next" aria-label="Next month">
+                                                <i class="fas fa-chevron-right"></i>
+                                            </button>
+                                        </div>
+                                        <div class="phase-calendar-grid" id="phase-calendar-grid"></div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -255,7 +280,7 @@
                     </div>
                 </div>
 
-                <!-- Coverage Test Lab -->
+                {# Coverage Test Lab temporarily hidden.
                 <div class="row mt-4">
                     <div class="col-12">
                         <div class="card">
@@ -331,6 +356,7 @@
                         </div>
                     </div>
                 </div>
+                #}
 
                 <!-- Time Series Graphs -->
                 <div class="row mt-4">
@@ -428,27 +454,12 @@
                                 <select id="growth-phase" class="form-select">
                                     <option value="colonization">Colonization</option>
                                     <option value="fruiting">Fruiting</option>
+                                    <option value="stopped">Stopped (server only)</option>
                                 </select>
+                                <small class="form-text text-muted d-block mt-2" id="growth-phase-status"></small>
                                 <button class="btn btn-primary w-100 mt-2" onclick="saveGrowthPhase()">
                                     Save Phase
                                 </button>
-                                <hr>
-                                <h6>Chart phase periods</h6>
-                                <p class="small text-muted mb-2">Add past periods to color and explain the charts.</p>
-                                <label for="phase-period-type" class="form-label">Phase</label>
-                                <select id="phase-period-type" class="form-select">
-                                    <option value="colonization">Incubation</option>
-                                    <option value="fruiting">Fruiting</option>
-                                </select>
-                                <label for="phase-period-start" class="form-label mt-2">Start</label>
-                                <input type="datetime-local" id="phase-period-start" class="form-control">
-                                <label for="phase-period-end" class="form-label mt-2">End</label>
-                                <input type="datetime-local" id="phase-period-end" class="form-control">
-                                <button class="btn btn-outline-primary w-100 mt-2" type="button" onclick="addPhasePeriod()">
-                                    Add Period
-                                </button>
-                                <div id="phase-period-status" class="small mt-2"></div>
-                                <div id="phase-period-list" class="phase-period-list mt-2"></div>
                             </div>
                         </div>
                     </div>
@@ -457,6 +468,7 @@
 
             <!-- Settings Tab -->
             <div id="settings-tab" class="tab-pane fade">
+                <div id="notification-center" class="card mt-4"></div>
                 <div class="row mt-4">
                     <div class="col-lg-8">
                         <div class="card">
@@ -564,17 +576,47 @@
         </div>
     </div>
 
+    <div class="modal fade" id="notification-opt-in-modal" tabindex="-1"
+         aria-labelledby="notification-opt-in-title" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content notification-opt-in">
+                <div class="modal-body text-center p-4 p-sm-5">
+                    <span class="notification-opt-in-icon" aria-hidden="true"><i class="fas fa-bell"></i></span>
+                    <h5 class="mt-3" id="notification-opt-in-title">Bekapcsolod az értesítéseket?</h5>
+                    <p class="text-muted mb-4">A GombaBox akkor is tud jelezni a fontos eltérésekről, amikor az alkalmazás nincs megnyitva.</p>
+                    <p id="notification-opt-in-info" class="small text-danger" role="status"></p>
+                    <div class="d-flex flex-column flex-sm-row justify-content-center gap-2">
+                        <button type="button" class="btn btn-primary" id="notification-opt-in-enable">
+                            <i class="fas fa-bell me-1" aria-hidden="true"></i> Bekapcsolás
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" id="notification-opt-in-later" data-bs-dismiss="modal">Most nem</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Footer -->
     <footer class="footer">
         <p>&copy; 2026 GombaBox - Automated Mushroom Growing System. All rights reserved.</p>
         <small>Last updated: <span id="last-update">--:--:--</span></small>
     </footer>
 
+    <button id="install-app-btn" class="pwa-install-fab d-none" type="button"
+            aria-label="GombaBox app telepítése" title="GombaBox app telepítése">
+        <span class="pwa-install-icon" aria-hidden="true">
+            <i class="fas fa-mobile-screen-button"></i>
+            <i class="fas fa-arrow-down pwa-install-icon-arrow"></i>
+        </span>
+        <span class="visually-hidden">GombaBox app telepítése</span>
+    </button>
+
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
     <!-- PWA Diagnostic Panel -->
     <!-- Frontend JavaScript -->
-    <script src="/static/js/dashboard.js"></script>
+    <script src="/static/js/dashboard.js?v=12"></script>
+    <script src="/static/js/notifications.js?v=3"></script>
 </body>
 </html>

@@ -20,7 +20,7 @@ DEFAULTS = {
     'camera_light_lead_seconds': 0,  # LED lead time before capture (seconds), focus wait handled separately
     'sensor_sample_interval_s': 60,  # Sensor measure + DB save interval (seconds)
     'control_eval_interval_s': 1,    # Control decision interval (seconds)
-    'growth_phase': 'fruiting'  # colonization | fruiting
+    'growth_phase': 'fruiting'  # colonization | fruiting | stopped
 }
 
 SETTING_DESCRIPTIONS = {
@@ -40,7 +40,7 @@ SETTING_DESCRIPTIONS = {
     'camera_light_lead_seconds': 'LED lead time before capture in seconds.',
     'sensor_sample_interval_s': 'Sensor measure and save interval in seconds.',
     'control_eval_interval_s': 'Control decision interval in seconds.',
-    'growth_phase': 'Grow phase: colonization or fruiting.'
+    'growth_phase': 'Operating state: colonization, fruiting, or stopped.'
 }
 
 class Config:
