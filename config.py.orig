@@ -11,7 +11,6 @@ DEFAULTS = {
     'humidity_pulse_duration_s': 20, # Humidifier ON pulse length (seconds)
     'humidity_pulse_cooldown_s': 60, # Delay after humidity pulse before next one (seconds)
     'co2_pulse_threshold_ppm': 800,  # CO2 threshold for impulse ventilation (ppm)
-    'co2_hysteresis_ppm': 100,       # CO2 demand clears at threshold minus this band (ppm)
     'co2_pulse_duration_s': 5,        # Impulse ventilation ON time (seconds)
     'co2_pulse_cooldown_s': 90,       # Delay after impulse before allowing next one (seconds)
     'co2_auto_vent_interval_min': 30, # Automatic ventilation interval when no impulse occurred (minutes)
@@ -32,7 +31,6 @@ SETTING_DESCRIPTIONS = {
     'humidity_pulse_duration_s': 'Humidifier ON pulse in seconds.',
     'humidity_pulse_cooldown_s': 'Pause after humidifier pulse in seconds.',
     'co2_pulse_threshold_ppm': 'CO2 threshold for ventilation pulse.',
-    'co2_hysteresis_ppm': 'CO2 pulses stop at threshold minus this band (ppm); 0 disables hysteresis.',
     'co2_pulse_duration_s': 'Ventilation ON pulse in seconds.',
     'co2_pulse_cooldown_s': 'Pause after ventilation pulse in seconds.',
     'co2_auto_vent_interval_min': 'Auto ventilation interval in minutes.',  
@@ -95,14 +93,6 @@ class Config:
     @staticmethod
     def set(key, value):
         """Set a value and save to database."""
-        if key == 'co2_hysteresis_ppm':
-            try:
-                number = float(value)
-                if not number.is_integer() or number < 0:
-                    raise ValueError
-                value = int(number)
-            except (TypeError, ValueError, OverflowError):
-                raise ValueError('CO2 hysteresis must be a non-negative whole number in ppm')
         setting = Setting.query.get(key)
         
         if setting:

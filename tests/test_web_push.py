@@ -112,6 +112,26 @@ class NotificationTests(unittest.TestCase):
             self.assertTrue(self.monitor.send(self.sub, dict(title='Teszt', detail='Árvíztűrő')))
             self.assertEqual(post.call_count, 1)
 
+    def test_history_read_cursor_and_test_logging(self):
+        self.register()
+        with patch.object(self.monitor, 'send', return_value=True):
+            self.client.post('/api/push/test', headers=self.headers)
+        history = self.client.get('/api/push/device', headers=self.headers).json
+        self.assertEqual(history['unread'], 1)
+        event_id = history['events'][0]['id']
+        self.assertEqual(self.client.post('/api/push/read', headers=self.headers, json={'lastId': event_id}).status_code, 200)
+        self.assertEqual(self.client.get('/api/push/device', headers=self.headers).json['unread'], 0)
+        self.client.post('/api/push/read', headers=self.headers, json={'lastId': 0})
+        self.assertEqual(self.client.get('/api/push/device', headers=self.headers).json['lastRead'], event_id)
+        other = {'X-Notification-Token': 'other-device-' * 5}
+        self.assertEqual(self.client.get('/api/push/device', headers=other).json['events'], [])
+        with self.monitor.connect() as db:
+            db.execute('DELETE FROM events')
+            db.execute('UPDATE devices SET last_test=0')
+        with patch.object(self.monitor, 'send', return_value=True):
+            self.client.post('/api/push/test', headers=self.headers)
+        self.assertEqual(self.client.get('/api/push/device', headers=self.headers).json['unread'], 1)
+
     def test_test_notification_works_when_stopped_and_errors_are_json(self):
         self.register()
         self.snapshot['phase'] = 'stopped'

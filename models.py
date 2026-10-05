@@ -78,13 +78,16 @@ class SystemLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     timestamp = db.Column(db.DateTime, default=datetime.datetime.now, index=True)
     level = db.Column(db.String(10), default="INFO")  # INFO, WARNING, ERROR
-    message = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    source = db.Column(db.String(40), nullable=True, index=True)
     
     def to_dict(self):
         return {
             'time': self.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
             'level': self.level,
-            'message': self.message
+            'message': self.message,
+            'source': self.source or 'legacy',
+            'id': self.id
         }
 
 

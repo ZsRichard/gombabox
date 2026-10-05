@@ -37,6 +37,7 @@ from sqlalchemy import func, inspect, or_, text
 # Database
 from models import db, Measurement, CameraCapture, SystemLog, Setting, GrowthPhasePeriod
 from config import Config, DEFAULTS
+from core.query_filters import browse_query
 from app_config import (
     DATABASE_URI, USE_MOCK_HARDWARE, API_HOST, API_PORT, API_DEBUG,
     DEFAULT_MEASUREMENTS_LIMIT,
@@ -91,7 +92,7 @@ DB_TABLES = {
     'system_logs': {
         'model': SystemLog,
         'id_field': 'id',
-        'columns': ['id', 'timestamp', 'level', 'message'],
+        'columns': ['id', 'timestamp', 'level', 'source', 'message'],
         'editable': ['level', 'message'],
         'order_by': SystemLog.timestamp.desc()
     },
@@ -149,6 +150,7 @@ class BackgroundTaskManager:
 
             # Create controller (reuse shared relay driver)
             controller = MushroomController(sensors, self.relay_driver, camera, self.db)
+            self.controller = controller
 
             # Main loop
             while self.running:
@@ -300,6 +302,10 @@ def _resolve_history_window(args, default_hours=1):
             raise ValueError(
                 f"Chart range cannot exceed {CHART_HISTORY_MAX_DAYS} days"
             )
+        # The calendar selects minutes. Include the entire final minute,
+        # including sensor readings with seconds and microseconds.
+        if len(str(end_value)) == 16:
+            end_dt += datetime.timedelta(seconds=59, microseconds=999999)
         return start_dt, end_dt, None, 'custom'
 
     try:
@@ -335,6 +341,11 @@ def _ensure_runtime_schema():
                 'CREATE INDEX IF NOT EXISTS ix_camera_captures_phase '
                 'ON camera_captures (phase)'
             ))
+    log_columns = {column['name'] for column in inspect(db.engine).get_columns('system_logs')}
+    with db.engine.begin() as connection:
+        if 'source' not in log_columns:
+            connection.execute(text('ALTER TABLE system_logs ADD COLUMN source VARCHAR(40)'))
+        connection.execute(text('CREATE INDEX IF NOT EXISTS ix_system_logs_source ON system_logs (source)'))
 
 
 def _normalize_capture_directory(capture_dir):
@@ -377,6 +388,8 @@ def _resolve_capture_file_path(filename, preferred_dir=None):
 
 def _capture_analysis_value(capture, capture_path=None):
     """Return the stored capture analysis, or compute it from the image when missing."""
+    if capture.phase == 'fruiting':
+        return None
     raw_analysis = capture.analysis_result
     if raw_analysis is not None and str(raw_analysis).strip():
         return _parse_analysis_value(raw_analysis)
@@ -743,6 +756,28 @@ def get_latest_measurement():
         return jsonify({'error': 'Failed to fetch measurement'}), 500
 
 
+@app.route('/api/history/availability', methods=['GET'])
+def get_history_availability():
+    """Show days with actual records, independently of configured phase periods."""
+    try:
+        days = {}
+        for model, key in ((Measurement, 'measurements'), (CameraCapture, 'captures')):
+            date_column = func.date(model.timestamp)
+            rows = db.session.query(
+                date_column, func.count(model.id),
+                func.min(model.timestamp), func.max(model.timestamp)
+            ).filter(model.timestamp.isnot(None)).group_by(date_column).all()
+            for day, count, first, last in rows:
+                entry = days.setdefault(day, {'date': day, 'measurements': 0, 'captures': 0})
+                entry[key] = count
+                entry[f'{key}_first'] = first.isoformat(timespec='seconds')
+                entry[f'{key}_last'] = last.isoformat(timespec='seconds')
+        return jsonify({'days': [days[day] for day in sorted(days)]})
+    except Exception:
+        logger.exception('Error fetching history availability')
+        return jsonify({'error': 'Failed to fetch history availability'}), 500
+
+
 @app.route('/api/measurements/history', methods=['GET'])
 def get_measurements_history():
     """Get chart measurements by preset hours or an exact start/end range."""
@@ -754,7 +789,9 @@ def get_measurements_history():
         )
         total_count = measurements_query.count()
         if total_count > CHART_HISTORY_MAX_POINTS:
-            stride = (total_count + CHART_HISTORY_MAX_POINTS - 1) // CHART_HISTORY_MAX_POINTS
+            # Reserve space for the last row, even when the stride divides
+            # the total exactly (e.g. 2,000 rows with a 1,000-point limit).
+            stride = (total_count + CHART_HISTORY_MAX_POINTS - 3) // (CHART_HISTORY_MAX_POINTS - 1)
             ranked_measurements = db.session.query(
                 Measurement.id.label('measurement_id'),
                 func.row_number().over(
@@ -816,7 +853,7 @@ def get_camera_history():
         capture_data = []
         for capture in captures:
             capture_path = None
-            if not capture.analysis_result or not str(capture.analysis_result).strip():
+            if capture.phase != 'fruiting' and (not capture.analysis_result or not str(capture.analysis_result).strip()):
                 capture_path = resolve_capture_file_path(capture.filename)
             capture_data.append({
                 'time': capture.timestamp.strftime('%Y-%m-%d %H:%M'),
@@ -831,13 +868,30 @@ def get_camera_history():
             'start': start_dt.isoformat(timespec='minutes'),
             'end': end_dt.isoformat(timespec='minutes'),
             'count': total_count,
-            'returned_count': len(capture_data)
+            'returned_count': len(capture_data),
+            'fruiting_only': _history_window_is_fruiting(start_dt, end_dt)
         })
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error fetching camera history: {e}")
         return jsonify({'error': 'Failed to fetch camera history'}), 500
+
+
+def _history_window_is_fruiting(start_dt, end_dt):
+    """Hide coverage only when phase records cover the entire requested window."""
+    periods = GrowthPhasePeriod.query.filter(
+        GrowthPhasePeriod.start_time <= end_dt,
+        or_(GrowthPhasePeriod.end_time.is_(None), GrowthPhasePeriod.end_time > start_dt)
+    ).order_by(GrowthPhasePeriod.start_time.asc()).all()
+    cursor = start_dt
+    for period in periods:
+        if period.phase != 'fruiting':
+            return False
+        if period.start_time > cursor:
+            return False
+        cursor = max(cursor, period.end_time or end_dt)
+    return bool(periods) and cursor >= end_dt
 
 
 def _parse_analysis_value(raw_value):
@@ -894,6 +948,8 @@ def compare_camera_history():
         best_preprocessed_original = None
 
         for capture in sampled_captures:
+            if capture.phase == 'fruiting':
+                continue
             capture_path = resolve_capture_file_path(capture.filename)
             original_analysis = _capture_analysis_value(capture, capture_path)
             preview_analysis = None
@@ -985,6 +1041,8 @@ def preview_camera_history_image():
             capture = CameraCapture.query.filter_by(filename=filename_param).first()
             if not capture:
                 return jsonify({'error': 'Requested capture filename not found in database'}), 404
+            if capture.phase == 'fruiting':
+                return jsonify({'error': 'Coverage analysis is not available for fruiting captures'}), 400
         else:
             capture = CameraCapture.query.filter(
                 CameraCapture.timestamp >= start_dt,
@@ -995,7 +1053,8 @@ def preview_camera_history_image():
         if capture:
             all_captures = CameraCapture.query.filter(
                 CameraCapture.timestamp >= start_dt,
-                CameraCapture.timestamp <= end_dt
+                CameraCapture.timestamp <= end_dt,
+                or_(CameraCapture.phase.is_(None), CameraCapture.phase != 'fruiting')
             ).order_by(CameraCapture.timestamp.asc()).all()
             sampled_captures = _sample_captures_by_interval(all_captures, sample_hours)
 
@@ -1101,7 +1160,9 @@ def get_latest_capture():
         analysis = 0.0
         timestamp = None
 
-        if full_path:
+        if str(Config.get('growth_phase') or '').strip().lower() == 'fruiting':
+            analysis = None
+        elif full_path:
             from core.vision import ImageAnalyzer
             analysis = ImageAnalyzer.calculate_mycelium_coverage(full_path)
 
@@ -1141,13 +1202,17 @@ def get_system_logs():
     """Get system event logs with pagination."""
     try:
         limit = request.args.get('limit', DEFAULT_LOGS_LIMIT, type=int)
-        limit = min(limit, 500)  # Prevent excessive queries
-        
-        logs = SystemLog.query.order_by(
-            SystemLog.timestamp.desc()
-        ).limit(limit).all()
-        
-        return jsonify([l.to_dict() for l in reversed(logs)])
+        limit = max(1, min(limit, 200))
+        offset = max(0, request.args.get('offset', 0, type=int))
+        query = browse_query(SystemLog, DB_TABLES['system_logs']['columns'], request.args)
+        total = query.count()
+        logs = query.offset(offset).limit(limit).all()
+        if request.args.get('paginated') == '1':
+            return jsonify({'logs': [log.to_dict() for log in logs], 'total': total,
+                            'limit': limit, 'offset': offset})
+        return jsonify([log.to_dict() for log in logs])
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error fetching system logs: {e}")
         return jsonify({'error': 'Failed to fetch logs'}), 500
@@ -1206,6 +1271,8 @@ def settings_endpoint(key):
             Config.set(key, new_value)
             logger.info(f"Setting '{key}' updated to '{new_value}'")
             return jsonify({'status': 'ok', 'key': key, 'value': new_value})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error handling settings for {key}: {e}")
         logger.exception(e)
@@ -1242,7 +1309,9 @@ def get_db_table_rows(table_name):
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
 
-        query = info['model'].query.order_by(info['order_by'])
+        default_sort = 'timestamp' if 'timestamp' in info['columns'] else 'key'
+        query = browse_query(info['model'], info['columns'], request.args, default_sort,
+                             'asc' if default_sort == 'key' else 'desc')
         total = query.count()
         rows = query.offset(offset).limit(limit).all()
 
@@ -1268,6 +1337,8 @@ def get_db_table_rows(table_name):
             'limit': limit,
             'offset': offset
         })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error fetching database rows for {table_name}: {e}")
         return jsonify({'error': 'Failed to fetch database rows'}), 500
@@ -1305,6 +1376,7 @@ def update_db_row(table_name, row_id):
             setattr(row, field, value)
 
         db.session.commit()
+        logger.info("Database row updated: %s/%s; fields: %s", table_name, row_id, ', '.join(updates))
         return jsonify({'status': 'updated'})
     except Exception as e:
         logger.error(f"Error updating database row {table_name}/{row_id}: {e}")
@@ -1374,12 +1446,8 @@ def growth_phase():
                     start_time=changed_at,
                     end_time=None
                 ))
-            db.session.add(SystemLog(
-                level='INFO',
-                message=f"Growth phase changed from {previous_phase or 'unknown'} to {phase}"
-            ))
             db.session.commit()
-        logger.info(f"Growth phase updated to '{phase}'")
+            logger.info(f"Growth phase changed from {previous_phase or 'unknown'} to {phase}")
         _restart_service_async()
         return jsonify({'status': 'restarting', 'phase': phase})
 
@@ -1451,6 +1519,7 @@ def delete_phase_period(period_id):
             return jsonify({'error': 'Phase period not found'}), 404
         db.session.delete(period)
         db.session.commit()
+        logger.info("Database row deleted: %s/%s", table_name, row_id)
         return jsonify({'status': 'deleted'})
     except Exception as e:
         logger.error(f"Error deleting phase period {period_id}: {e}")
@@ -1512,6 +1581,7 @@ def notification_snapshot():
         'camera_interval_seconds': float(Config.get('camera_interval') or 60) * 60,
         'target_temp': float(Config.get('target_temp') or 24),
         'target_humidity': float(Config.get('target_humidity') or 90),
+        'response_alerts': task_manager.controller.response_monitor.snapshot() if task_manager.is_running() and hasattr(task_manager, 'controller') and not USE_MOCK_HARDWARE and not getattr(task_manager.controller.sensors, 'is_mock', False) else [],
     }
     
 
@@ -1566,7 +1636,8 @@ def restart_system():
 def capture_now():
     """Trigger manual camera capture."""
     try:
-        if str(Config.get('growth_phase') or '').strip().lower() == 'stopped':
+        phase = str(Config.get('growth_phase') or '').strip().lower()
+        if phase == 'stopped':
             return jsonify({'error': 'Image capture is disabled while the system is stopped'}), 409
 
         from drivers.camera import RealCameraDriver, MockCameraDriver
@@ -1604,20 +1675,22 @@ def capture_now():
             return jsonify({'error': 'Failed to capture image'}), 500
         
         # Analyze coverage
-        coverage_percent = ImageAnalyzer.calculate_mycelium_coverage(image_path)
+        coverage_percent = (ImageAnalyzer.calculate_mycelium_coverage(image_path)
+                            if phase == 'colonization' else None)
         
         # Save to database
         import os
         filename = os.path.basename(image_path)
         capture = CameraCapture(
             filename=filename,
-            analysis_result=f"{coverage_percent}%",
-            phase='incubation' if str(Config.get('growth_phase')).lower() == 'colonization' else 'fruiting'
+            analysis_result=f"{coverage_percent}%" if coverage_percent is not None else None,
+            phase='incubation' if phase == 'colonization' else 'fruiting'
         )
         db.session.add(capture)
         db.session.commit()
         
-        logger.info(f"Manual capture: {filename}, Coverage: {coverage_percent}%")
+        logger.info(f"Manual capture: {filename}, Coverage: {coverage_percent}%"
+                    if coverage_percent is not None else f"Manual fruiting capture: {filename}, analysis skipped")
         
         return jsonify({
             'status': 'ok',
@@ -1752,6 +1825,8 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()
         _ensure_runtime_schema()
+        from core.event_logging import install_event_logging
+        event_log_handler = install_event_logging(db.engine.url.database)
         logger.info("Database initialized.")
     
     # Start background task manager

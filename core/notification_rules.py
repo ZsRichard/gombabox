@@ -8,6 +8,8 @@ def evaluate_snapshot(snapshot, temp_margin=2, humidity_margin=10, co2_limit=150
         alerts.append(dict(key=key, title=title, detail=detail))
     if snapshot['phase'] == 'stopped':
         return alerts
+    if snapshot['phase'] == 'fruiting':
+        alerts.extend(snapshot.get('response_alerts', []))
     if not snapshot['running']:
         add('automation', 'Az automatizálás nem fut', 'A szerver elérhető, de a háttérfolyamat áll.')
     age = snapshot['measurement_age_seconds']

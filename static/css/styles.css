@@ -37,7 +37,25 @@ body {
     letter-spacing: 0.02em;
 }
 
+.notification-dropdown {
+    position: absolute;
+    top: calc(100% + .5rem);
+    right: 0;
+    width: min(390px, calc(100vw - 24px));
+    padding: 1rem;
+    color: var(--forest);
+    background: #fffdf8;
+    border: 1px solid #c5cbb9;
+    border-radius: 1rem;
+    box-shadow: 0 12px 36px #25351f33;
+    z-index: 1050;
+}
+#notification-dropdown-list { max-height: min(55vh, 420px); overflow-y: auto; }
+.notification-message { padding: .75rem; border-bottom: 1px solid #e5e7dd; }
+.notification-message.unread { background: #eef2e7; border-left: 3px solid var(--moss); }
+.notification-message small { display: block; color: #67705e; margin-top: .35rem; }
 .navbar-actions {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 0.75rem;
@@ -458,12 +476,27 @@ body {
 
 .phase-calendar-weekday,
 .phase-calendar-day {
+    position: relative;
     min-height: 34px;
     display: flex;
     align-items: center;
     justify-content: center;
     border-radius: 5px;
     font-size: 0.82rem;
+}
+
+.history-data-dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.phase-calendar-day .history-data-dot {
+    position: absolute;
+    bottom: 3px;
+    left: calc(50% - 2.5px);
 }
 
 .phase-calendar-weekday {

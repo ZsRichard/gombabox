@@ -5,6 +5,7 @@ import time
 from config import Config
 from models import Measurement, SystemLog, CameraCapture
 from core.vision import ImageAnalyzer
+from core.response_monitor import ResponseMonitor
 
 # --- CONSTANTS (To avoid "magic numbers" in code) ---
 RELAY_ID_FAN = 1        # Fan
@@ -37,6 +38,7 @@ class MushroomController:
         self.relays = relay_driver
         self.camera = camera_driver
         self.db = db_session
+        self.response_monitor = ResponseMonitor()
         
         # Time-based scheduling state
         now = time.monotonic()
@@ -51,6 +53,7 @@ class MushroomController:
         self._last_fan_impulse_at = now
 
         # Humidifier impulse control state
+        self._co2_ventilation_demand = False
         self._humidifier_pulse_end_at = 0.0
         self._humidifier_next_allowed_pulse_at = 0.0
         
@@ -96,6 +99,12 @@ class MushroomController:
             self._latest_sensor_data = sensor_data
             self._save_measurement(sensor_data)
             self.db.commit()
+            self.response_monitor.sample(
+                sensor_data, self._get_growth_phase(), self.relays.get_state(RELAY_ID_LIGHT),
+                getattr(self.relays, 'camera_capture_active', False),
+                float(Config.get('target_humidity')) - float(Config.get('humidity_hysteresis')),
+                float(Config.get('co2_pulse_threshold_ppm')),
+                float(Config.get('sensor_sample_interval_s')))
 
         except Exception as e:
             logger.error(f"Error in sensor cycle: {e}")
@@ -129,7 +138,8 @@ class MushroomController:
         Visual inspection cycle (e.g., runs hourly).
         Photograph -> Analyze -> Save
         """
-        if self._get_growth_phase() == 'stopped':
+        phase = self._get_growth_phase()
+        if phase == 'stopped':
             return
 
         logger.info("Visual inspection started.")
@@ -146,13 +156,15 @@ class MushroomController:
                 return
 
             # 2. Image analysis (SRP: Separate class does the calculation)
-            coverage_percent = ImageAnalyzer.calculate_mycelium_coverage(image_path)
+            coverage_percent = (ImageAnalyzer.calculate_mycelium_coverage(image_path)
+                                if phase == 'colonization' else None)
             
             # 3. Save result to database
-            self._save_camera_capture(image_path, coverage_percent)
+            self._save_camera_capture(image_path, coverage_percent, phase=phase)
             
             # Logging
-            self._log_system_event("INFO", f"Image analyzed. Coverage: {coverage_percent}%")
+            self._log_system_event("INFO", f"Image analyzed. Coverage: {coverage_percent}%"
+                                   if coverage_percent is not None else "Fruiting image saved without coverage analysis.")
             self.db.commit()
 
         except Exception as e:
@@ -190,6 +202,7 @@ class MushroomController:
             return
 
         self.relays.set_state(RELAY_ID_HUMIDIFIER, True)
+        self.response_monitor.pulse('humidity')
         self._log_system_event(
             "INFO",
             f"Humidifier impulse ON for {pulse_duration_s}s (Measured: {current_humidity}%, target: {target_humidity}%)"
@@ -223,11 +236,18 @@ class MushroomController:
     def _control_air_quality(self, current_co2):
         """Control ventilation with event-based CO2 impulses and cooldown."""
         threshold_ppm = int(Config.get('co2_pulse_threshold_ppm'))
+        hysteresis_ppm = max(0, int(Config.get('co2_hysteresis_ppm')))
         pulse_duration_s = int(Config.get('co2_pulse_duration_s'))
         cooldown_s = int(Config.get('co2_pulse_cooldown_s'))
         auto_interval_s = int(Config.get('co2_auto_vent_interval_min')) * 60
 
         now = time.monotonic()
+
+        # Remember CO2 demand inside the dead band, including during pulse/cooldown.
+        if current_co2 > threshold_ppm:
+            self._co2_ventilation_demand = True
+        elif current_co2 <= max(0, threshold_ppm - hysteresis_ppm):
+            self._co2_ventilation_demand = False
 
         # End active pulse without blocking the main loop.
         if self._fan_pulse_end_at > 0 and now >= self._fan_pulse_end_at:
@@ -250,9 +270,10 @@ class MushroomController:
         should_pulse = False
         pulse_reason = ""
 
-        if current_co2 > threshold_ppm:
+        if self._co2_ventilation_demand:
             should_pulse = True
-            pulse_reason = f"CO2 trigger (CO2: {current_co2} ppm > {threshold_ppm} ppm)"
+            pulse_reason = (f"CO2 demand (CO2: {current_co2} ppm, trigger > {threshold_ppm} ppm, "
+                            f"clear <= {max(0, threshold_ppm - hysteresis_ppm)} ppm)")
         elif auto_interval_s > 0 and (now - self._last_fan_impulse_at) >= auto_interval_s:
             should_pulse = True
             pulse_reason = (
@@ -263,6 +284,7 @@ class MushroomController:
             return
 
         self.relays.set_state(RELAY_ID_FAN, True)
+        self.response_monitor.pulse('co2')
         self._log_system_event(
             "INFO",
             f"Ventilation impulse ON for {pulse_duration_s}s - {pulse_reason}"
@@ -276,7 +298,9 @@ class MushroomController:
         return str(phase).strip().lower()
 
     def _ensure_colonization_mode(self):
+        self.response_monitor.reset()
         """Disable climate control and daily light during colonization."""
+        self._co2_ventilation_demand = False
         self._fan_pulse_end_at = 0.0
         self._fan_next_allowed_pulse_at = 0.0
         self._humidifier_pulse_end_at = 0.0
@@ -296,7 +320,9 @@ class MushroomController:
             self._log_system_event("INFO", "Light OFF (Colonization phase)")
 
     def _ensure_stopped_mode(self):
+        self.response_monitor.reset()
         """Keep every actuator off without reading sensors or writing measurements."""
+        self._co2_ventilation_demand = False
         self._fan_pulse_end_at = 0.0
         self._fan_next_allowed_pulse_at = 0.0
         self._humidifier_pulse_end_at = 0.0
@@ -357,20 +383,17 @@ class MushroomController:
         )
         self.db.add(measurement)
 
-    def _save_camera_capture(self, filepath, coverage):
+    def _save_camera_capture(self, filepath, coverage, phase=None):
         """Save image metadata."""
         filename = os.path.basename(filepath)
-        phase = self._get_growth_phase()
+        phase = phase or self._get_growth_phase()
         capture = CameraCapture(
             filename=filename,
-            analysis_result=f"{coverage}%",  # Could optionally store as float
+            analysis_result=f"{coverage}%" if phase == 'colonization' and coverage is not None else None,
             phase='incubation' if phase == 'colonization' else 'fruiting' if phase == 'fruiting' else None
         )
         self.db.add(capture)
 
     def _log_system_event(self, level, message):
-        """Log system events to the database."""
-        log_entry = SystemLog(level=level, message=message)
-        self.db.add(log_entry)
-        # Also print to console for development
-        print(f"[{level}] {message}")
+        """Emit once to the journal and the independent database event writer."""
+        logger.log(getattr(logging, level, logging.INFO), message)

@@ -29,6 +29,30 @@
     const indicator = document.getElementById('notification-indicator');
     const indicatorIcon = document.getElementById('notification-indicator-icon');
     const indicatorCount = document.getElementById('notification-indicator-count');
+    const dropdown = document.getElementById('notification-dropdown');
+    const dropdownList = document.getElementById('notification-dropdown-list');
+    const dropdownStatus = document.getElementById('notification-dropdown-status');
+    let inbox = [], unread = 0, lastRead = 0;
+    function closeInbox() { dropdown.hidden = true; indicator.setAttribute('aria-expanded', 'false'); }
+    async function refreshInbox() {
+        try {
+            const remote = await pushApi('/api/push/device');
+            inbox = remote.events; unread = remote.unread; lastRead = remote.lastRead;
+            dropdownList.replaceChildren();
+            dropdownStatus.textContent = inbox.length ? 'Az elmúlt 30 nap · legutóbbi 50 üzenet' : 'Még nincs értesítés.';
+            for (const entry of inbox) {
+                const li = document.createElement('li');
+                li.className = 'notification-message' + (entry.id > lastRead ? ' unread' : '');
+                const title = document.createElement('strong'); title.textContent = entry.title;
+                const detail = document.createElement('div'); detail.textContent = entry.detail;
+                const time = document.createElement('small');
+                time.textContent = new Date(entry.created * 1000).toLocaleString('hu-HU', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'}) + (entry.delivered ? '' : ' · Küldés sikertelen');
+                li.append(title, detail, time); dropdownList.append(li);
+            }
+            document.getElementById('notification-read-all').disabled = unread === 0;
+            void updateNotificationIndicator();
+        } catch { dropdownStatus.textContent = 'Az előzmények most nem tölthetők be. Nyisd meg újra a panelt az újrapróbálkozáshoz.'; }
+    }
     const optInModalElement = document.getElementById('notification-opt-in-modal');
     const optInEnable = document.getElementById('notification-opt-in-enable');
     const optInLater = document.getElementById('notification-opt-in-later');
@@ -63,10 +87,10 @@
         indicator.setAttribute('aria-label', label);
         indicator.title = label;
     }
-    async function updateNotificationIndicator(activeCount = [...states.values()].filter(s => s.sent).length) {
+    async function updateNotificationIndicator() {
         if (indicatorCount) {
-            indicatorCount.textContent = activeCount > 99 ? '99+' : String(activeCount);
-            indicatorCount.classList.toggle('d-none', activeCount === 0);
+            indicatorCount.textContent = unread > 99 ? '99+' : String(unread);
+            indicatorCount.classList.toggle('d-none', unread === 0);
         }
         if (!supportsSystemNotifications()) {
             setIndicatorState('unsupported', 'A rendszerértesítések nem támogatottak – beállítások megnyitása', 'fa-bell-slash');
@@ -84,7 +108,7 @@
             const registration = await navigator.serviceWorker.getRegistration();
             const subscription = registration && await registration.pushManager.getSubscription();
             if (subscription) {
-                setIndicatorState('enabled', 'Az értesítések be vannak kapcsolva – beállítások megnyitása', 'fa-bell');
+                setIndicatorState('enabled', `Értesítések – ${unread} olvasatlan üzenet`, 'fa-bell');
             } else {
                 setIndicatorState('disabled', 'Az értesítési feliratkozás hiányzik – újraengedélyezés', 'fa-bell-slash');
             }
@@ -176,7 +200,7 @@
         for (const [key, state] of states) {
             if (!keys.has(key)) {
                 states.delete(key);
-                if (state.sent && prefs.recovery) publish({ key, title: 'Helyreállt az állapot', detail: state.alert.title });
+                if (state.sent && prefs.recovery) publish({ key, title: key.startsWith('response_') ? 'Visszaellenőrzési jelzés lezárva' : 'Helyreállt az állapot', detail: state.alert.title });
             }
         }
         render();
@@ -235,11 +259,27 @@
         try { await pushApi('/api/push/test', 'POST'); info('A push-szolgáltató átvette a próbaértesítést. Ellenőrizd a telefon értesítéseit.'); }
         catch (error) { info(error.message); }
     });
-    indicator.addEventListener('click', () => {
+    function openSettings() {
+        closeInbox();
         const tab = document.querySelector('a[href="#settings-tab"]');
         bootstrap.Tab.getOrCreateInstance(tab).show();
         panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    indicator.addEventListener('click', () => {
+        if (!prefs.system || !prefs.enabled || !supportsSystemNotifications() || Notification.permission !== 'granted') { openSettings(); return; }
+        dropdown.hidden = !dropdown.hidden;
+        indicator.setAttribute('aria-expanded', String(!dropdown.hidden));
+        if (!dropdown.hidden) { dropdownStatus.textContent = 'Betöltés…'; void refreshInbox(); }
     });
+    document.getElementById('notification-open-settings').addEventListener('click', openSettings);
+    document.getElementById('notification-read-all').addEventListener('click', async () => {
+        try { await pushApi('/api/push/read', 'POST', {lastId: Math.max(0, ...inbox.map(e => e.id))}); await refreshInbox(); }
+        catch { dropdownStatus.textContent = 'Az olvasottság mentése nem sikerült. Próbáld újra.'; }
+    });
+    document.addEventListener('click', event => { if (!dropdown.contains(event.target) && !indicator.contains(event.target)) closeInbox(); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape' && !dropdown.hidden) { closeInbox(); indicator.focus(); } });
+    if (prefs.system) void refreshInbox();
+    setInterval(() => { if (prefs.system) void refreshInbox(); }, 30000);
     if (optInEnable) optInEnable.addEventListener('click', async () => {
         optInEnable.disabled = true;
         const enabled = await enableSystemNotifications();

@@ -65,6 +65,7 @@ class PushMonitor:
         with self.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS devices (token TEXT PRIMARY KEY, subscription TEXT NOT NULL, prefs TEXT NOT NULL, state TEXT NOT NULL DEFAULT "{}", last_test REAL NOT NULL DEFAULT 0)')
             db.execute('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, token TEXT, created REAL, title TEXT, detail TEXT, delivered INTEGER)')
+            db.execute('CREATE TABLE IF NOT EXISTS receipts (token TEXT PRIMARY KEY, last_id INTEGER NOT NULL DEFAULT 0)')
         os.chmod(self.dbfile, 0o600)
 
     @contextmanager
@@ -92,6 +93,11 @@ class PushMonitor:
             # Do not log subscription endpoints, keys, or provider response bodies.
             self.app.logger.error('Web Push preparation/transport failed (%s)', type(exc).__name__)
             return False
+
+    def log_event(self, db, token, created, title, detail, delivered):
+        # Keep IDs above read cursors even after retention removes every event.
+        db.execute('INSERT INTO events(id,token,created,title,detail,delivered) VALUES((SELECT MAX(n)+1 FROM (SELECT COALESCE(MAX(id),0) AS n FROM events UNION ALL SELECT COALESCE(MAX(last_id),0) AS n FROM receipts)),?,?,?,?,?)',
+                   (token, created, title, detail, int(bool(delivered))))
 
     def process(self):
         snapshot = self.snapshot()
@@ -127,7 +133,7 @@ class PushMonitor:
                 entry.setdefault('clear_since', now)
                 if now - entry['clear_since'] >= 60:
                     if entry['sent'] and prefs['recovery']:
-                        pending.append(dict(key='recovery_' + key, title='Helyreállt az állapot', detail=entry['title']))
+                        pending.append(dict(key='recovery_' + key, title='Visszaellenőrzési jelzés lezárva' if key.startswith('response_') else 'Helyreállt az állapot', detail=entry['title'] + (' – A jelzés már nem aktív; ez önmagában nem bizonyítja az eszköz helyreállását.' if key.startswith('response_') else '')))
                     del state[key]
             events.extend(event for event in pending if now >= event.get('retry', 0))
             expired = False
@@ -145,7 +151,7 @@ class PushMonitor:
                     else:
                         event['retry'] = now + 300
                 with self.connect() as db:
-                    db.execute('INSERT INTO events(token,created,title,detail,delivered) VALUES(?,?,?,?,?)', (device['token'], now, event['title'], event['detail'], int(result)))
+                    self.log_event(db, device['token'], now, event['title'], event['detail'], result)
             with self.connect() as db:
                 if expired:
                     db.execute('DELETE FROM devices WHERE token=?', (device['token'],))
@@ -186,9 +192,12 @@ def install_web_push(app, snapshot):
                 db.execute('DELETE FROM events WHERE token=?', (token,))
                 return jsonify(ok=True)
             if request.method == 'GET':
-                rows = db.execute('SELECT created,title,detail,delivered FROM events WHERE token=? ORDER BY id DESC LIMIT 50', (token,)).fetchall()
+                rows = db.execute('SELECT id,created,title,detail,delivered FROM events WHERE token=? ORDER BY id DESC LIMIT 50', (token,)).fetchall()
+                receipt = db.execute('SELECT last_id FROM receipts WHERE token=?', (token,)).fetchone()
+                last_read = receipt['last_id'] if receipt else 0
+                unread = db.execute('SELECT count(*) FROM events WHERE token=? AND id>?', (token, last_read)).fetchone()[0]
                 device = db.execute('SELECT state FROM devices WHERE token=?', (token,)).fetchone()
-                return jsonify(subscribed=device is not None, events=[dict(r) for r in rows])
+                return jsonify(subscribed=device is not None, events=[dict(r) for r in rows], lastRead=last_read, unread=unread)
             try:
                 payload = request.get_json()
                 sub = validate_subscription(payload['subscription'])
@@ -203,6 +212,22 @@ def install_web_push(app, snapshot):
             db.execute('INSERT INTO devices(token,subscription,prefs) VALUES(?,?,?) ON CONFLICT(token) DO UPDATE SET subscription=excluded.subscription,prefs=excluded.prefs,state="{}"', (token, json.dumps(sub), json.dumps(prefs)))
         return jsonify(ok=True)
 
+    @app.route('/api/push/read', methods=['POST'])
+    def push_read():
+        raw_token = request.headers.get('X-Notification-Token', '')
+        if not 32 <= len(raw_token) <= 200:
+            return jsonify(error='Hiányzó eszközazonosító.'), 400
+        token = hashlib.sha256(raw_token.encode()).hexdigest()
+        payload = request.get_json(silent=True) or {}
+        last_id = payload.get('lastId')
+        if type(last_id) is not int or last_id < 0:
+            return jsonify(error='Érvénytelen üzenetazonosító.'), 400
+        with monitor.connect() as db:
+            maximum = db.execute('SELECT COALESCE(MAX(id),0) FROM events WHERE token=?', (token,)).fetchone()[0]
+            last_id = min(last_id, maximum)
+            db.execute('INSERT INTO receipts(token,last_id) VALUES(?,?) ON CONFLICT(token) DO UPDATE SET last_id=MAX(receipts.last_id,excluded.last_id)', (token, last_id))
+        return jsonify(ok=True)
+
     @app.route('/api/push/test', methods=['POST'])
     def push_test():
         token = hashlib.sha256(request.headers.get('X-Notification-Token', '').encode()).hexdigest()
@@ -214,5 +239,7 @@ def install_web_push(app, snapshot):
                 return jsonify(error='Próbaértesítés percenként egyszer küldhető.'), 429
             db.execute('UPDATE devices SET last_test=? WHERE token=?', (time.time(), token))
         delivered = monitor.send(json.loads(row['subscription']), dict(key='test', title='GombaBox próbaértesítés', detail='A szerver elküldte a Web Push üzenetet.'))
+        with monitor.connect() as db:
+            monitor.log_event(db, token, time.time(), 'GombaBox próbaértesítés', 'Próbaértesítés küldése.', delivered)
         return (jsonify(ok=True) if delivered else (jsonify(error='A push-szolgáltató nem fogadta el az üzenetet.'), 502))
     return monitor

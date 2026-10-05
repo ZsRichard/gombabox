@@ -92,7 +92,6 @@ const SETTINGS_SCHEMA = [
     { key: 'humidity_pulse_duration_s', step: '1' },
     { key: 'humidity_pulse_cooldown_s', step: '1' },
     { key: 'co2_pulse_threshold_ppm', step: '1' },
-    { key: 'co2_hysteresis_ppm', step: '1' },
     { key: 'co2_pulse_duration_s', step: '1' },
     { key: 'co2_pulse_cooldown_s', step: '1' },
     { key: 'co2_auto_vent_interval_min', step: '1' },
@@ -123,7 +122,6 @@ document.addEventListener('DOMContentLoaded', function() {
     loadGrowthPhase();
     loadPhasePeriods();
     initializeDatabaseTab();
-    initializeLogFilters();
     initializeMediaExportDates();
     initializeCoveragePreviewInterval();
     initializeCoveragePreviewControls();
@@ -146,7 +144,6 @@ function initializeMediaExportDates() {
 
     setDashboardDateInputValue(startInput, toDateTimeLocalInputValue(start));
     setDashboardDateInputValue(endInput, toDateTimeLocalInputValue(now));
-    initializeCalendarTimeSelectors('timelapse');
 
     const previousMonthButton = document.getElementById('timelapse-calendar-prev');
     const nextMonthButton = document.getElementById('timelapse-calendar-next');
@@ -179,16 +176,14 @@ function initializePhaseCalendarPopovers() {
                     timelapseCalendarMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
                 }
                 renderTimelapsePhaseCalendar();
-                syncCalendarTimeSelectors('timelapse');
             } else {
                 chartCalendarSelection = selection;
                 if (!Number.isNaN(selectedDate.getTime())) {
                     phaseCalendarMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
                 }
                 renderPhaseCalendar();
-                syncChartTimeSelectors();
+                loadHistoryAvailability().catch(error => console.warn('Calendar availability:', error));
             }
-            loadHistoryAvailability().catch(error => console.warn('Calendar availability:', error));
             openPhaseCalendarPopup(popupId);
         };
         input.addEventListener('click', openForInput);
@@ -315,64 +310,9 @@ function initializeCustomChartRange() {
     const previousMonthButton = document.getElementById('phase-calendar-prev');
     const nextMonthButton = document.getElementById('phase-calendar-next');
     setCustomChartIntervalFromHours(24);
-    initializeChartTimeSelectors();
     if (applyButton) applyButton.addEventListener('click', applyCustomChartRange);
     if (previousMonthButton) previousMonthButton.addEventListener('click', () => shiftPhaseCalendarMonth(-1));
     if (nextMonthButton) nextMonthButton.addEventListener('click', () => shiftPhaseCalendarMonth(1));
-}
-
-function initializeChartTimeSelectors() {
-    initializeCalendarTimeSelectors('chart');
-}
-
-function initializeCalendarTimeSelectors(prefix) {
-    ['start', 'end'].forEach(bound => {
-        ['hour', 'minute'].forEach(unit => {
-            const select = document.getElementById(`${prefix}-${bound}-${unit}`);
-            if (!select) return;
-            const count = unit === 'hour' ? 24 : 60;
-            select.innerHTML = Array.from({ length: count }, (_, value) => {
-                const number = String(value).padStart(2, '0');
-                return `<option value="${number}">${number}</option>`;
-            }).join('');
-            select.addEventListener('change', () => updateCalendarTime(prefix, bound));
-        });
-    });
-    syncCalendarTimeSelectors(prefix);
-}
-
-function syncChartTimeSelectors() {
-    syncCalendarTimeSelectors('chart');
-}
-
-function syncCalendarTimeSelectors(prefix) {
-    ['start', 'end'].forEach(bound => {
-        const value = getDashboardDateInputValue(document.getElementById(`${prefix}-${bound}-date`));
-        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return;
-        const hour = document.getElementById(`${prefix}-${bound}-hour`);
-        const minute = document.getElementById(`${prefix}-${bound}-minute`);
-        if (hour) hour.value = value.slice(11, 13);
-        if (minute) minute.value = value.slice(14, 16);
-    });
-}
-
-function updateChartTime(bound) {
-    updateCalendarTime('chart', bound);
-}
-
-function updateCalendarTime(prefix, bound) {
-    const input = document.getElementById(`${prefix}-${bound}-date`);
-    const value = getDashboardDateInputValue(input);
-    const hour = document.getElementById(`${prefix}-${bound}-hour`)?.value;
-    const minute = document.getElementById(`${prefix}-${bound}-minute`)?.value;
-    if (!value || !/^([01]\d|2[0-3])$/.test(hour) || !/^[0-5]\d$/.test(minute)) return;
-    setDashboardDateInputValue(input, `${value.slice(0, 10)}T${hour}:${minute}`);
-}
-
-function setCalendarDatePreservingTime(input, dateValue, fallbackTime) {
-    const value = getDashboardDateInputValue(input);
-    const time = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) ? value.slice(11, 16) : fallbackTime;
-    setDashboardDateInputValue(input, `${dateValue}T${time}`);
 }
 
 function setCustomChartIntervalFromHours(hours) {
@@ -611,68 +551,6 @@ let dbState = {
 };
 let dbEditContext = null;
 let dbEditModal = null;
-let databaseRequestSequence = 0;
-let logRequestSequence = 0;
-const logState = { offset: 0, total: 0, limit: 50 };
-
-function viewerParameters(prefix) {
-    const names = { search: 'q', start: 'start', end: 'end', sort: 'sort', direction: 'direction',
-        'filter-column': 'filter_column', 'filter-op': 'filter_op', 'filter-value': 'filter_value',
-        level: 'level', source: 'source' };
-    const params = new URLSearchParams();
-    Object.entries(names).forEach(([id, name]) => {
-        const element = document.getElementById(`${prefix}-${id}`);
-        if (element && element.value !== '') params.set(name, element.value);
-    });
-    return params;
-}
-
-function resetViewerFilters(prefix) {
-    ['search', 'start', 'end', 'filter-column', 'filter-value', 'level', 'source'].forEach(id => {
-        const element = document.getElementById(`${prefix}-${id}`);
-        if (element) element.value = '';
-    });
-}
-
-function updateDatabaseFilterColumns() {
-    const columns = dbTables[dbState.table]?.columns || [];
-    for (const id of ['db-sort', 'db-filter-column']) {
-        const select = document.getElementById(id);
-        if (!select) continue;
-        select.replaceChildren();
-        const values = id === 'db-sort' ? columns : ['', ...columns];
-        values.forEach(column => {
-            const option = document.createElement('option');
-            option.value = column;
-            option.textContent = column || 'No column filter';
-            select.appendChild(option);
-        });
-    }
-    const hasTimestamp = columns.includes('timestamp');
-    document.getElementById('db-sort').value = hasTimestamp ? 'timestamp' : 'key';
-    document.getElementById('db-direction').value = hasTimestamp ? 'desc' : 'asc';
-    ['db-start', 'db-end'].forEach(id => {
-        const input = document.getElementById(id);
-        input.disabled = !hasTimestamp;
-        input.value = '';
-    });
-}
-
-function initializeLogFilters() {
-    const apply = () => { logState.offset = 0; loadLogs(); };
-    document.getElementById('logs-apply')?.addEventListener('click', apply);
-    document.getElementById('logs-reset')?.addEventListener('click', () => { resetViewerFilters('logs'); apply(); });
-    document.getElementById('logs-search')?.addEventListener('keydown', event => { if (event.key === 'Enter') apply(); });
-    document.getElementById('logs-limit')?.addEventListener('change', apply);
-    document.getElementById('logs-prev')?.addEventListener('click', () => {
-        logState.offset = Math.max(0, logState.offset - logState.limit); loadLogs();
-    });
-    document.getElementById('logs-next')?.addEventListener('click', () => {
-        if (logState.offset + logState.limit < logState.total) {
-            logState.offset += logState.limit; loadLogs();
-        }
-    });
-}
 
 function initializeDatabaseTab() {
     const tableSelect = document.getElementById('db-table-select');
@@ -692,8 +570,6 @@ function initializeDatabaseTab() {
     tableSelect.addEventListener('change', () => {
         dbState.table = tableSelect.value;
         dbState.offset = 0;
-        resetViewerFilters('db');
-        updateDatabaseFilterColumns();
         loadDatabaseRows();
     });
 
@@ -704,11 +580,6 @@ function initializeDatabaseTab() {
     });
 
     refreshBtn.addEventListener('click', () => loadDatabaseRows());
-    const applyFilters = () => { dbState.offset = 0; loadDatabaseRows(); };
-    document.getElementById('db-apply')?.addEventListener('click', applyFilters);
-    document.getElementById('db-reset')?.addEventListener('click', () => { resetViewerFilters('db'); applyFilters(); });
-    document.getElementById('db-search')?.addEventListener('keydown', event => { if (event.key === 'Enter') applyFilters(); });
-    ['db-sort', 'db-direction'].forEach(id => document.getElementById(id)?.addEventListener('change', applyFilters));
 
     prevBtn.addEventListener('click', () => {
         dbState.offset = Math.max(0, dbState.offset - dbState.limit);
@@ -775,7 +646,6 @@ function loadDatabaseTables() {
                 tableSelect.value = dbState.table;
             }
 
-            updateDatabaseFilterColumns();
             loadDatabaseRows();
         })
         .catch(error => {
@@ -791,32 +661,26 @@ function loadDatabaseRows() {
 
     setDatabaseAlert('Loading data...');
 
-    const requestId = ++databaseRequestSequence;
-    const params = viewerParameters('db');
-    params.set('limit', dbState.limit);
-    params.set('offset', dbState.offset);
+    const params = new URLSearchParams({
+        limit: dbState.limit,
+        offset: dbState.offset
+    });
 
-    return fetch(`${API_BASE}/db/${encodeURIComponent(dbState.table)}?${params.toString()}`, { cache: 'no-store' })
+    fetch(`${API_BASE}/db/${encodeURIComponent(dbState.table)}?${params.toString()}`)
         .then(response => response.json())
         .then(data => {
-            if (requestId !== databaseRequestSequence) return;
             if (data.error) {
                 setDatabaseAlert(data.error, true);
                 return;
             }
 
             dbState.total = Number(data.total) || 0;
-            if (dbState.offset > 0 && dbState.offset >= dbState.total) {
-                dbState.offset = Math.max(0, (Math.ceil(dbState.total / dbState.limit) - 1) * dbState.limit);
-                return loadDatabaseRows();
-            }
             renderDatabaseTable(data);
             updateDatabasePager();
             setDatabaseAlert('');
         })
         .catch(error => {
             console.error('Database rows fetch error:', error);
-            if (requestId !== databaseRequestSequence) return;
             setDatabaseAlert('Failed to load database rows.', true);
         });
 }
@@ -838,18 +702,6 @@ function renderDatabaseTable(data) {
     columns.forEach(column => {
         const th = document.createElement('th');
         th.textContent = column;
-        const sortButton = document.createElement('button');
-        sortButton.type = 'button';
-        sortButton.className = 'btn btn-sm btn-link p-0 text-body';
-        const isSorted = document.getElementById('db-sort').value === column;
-        sortButton.textContent = column + (isSorted ? (document.getElementById('db-direction').value === 'asc' ? ' ↑' : ' ↓') : ' ↕');
-        sortButton.addEventListener('click', () => {
-            const sort = document.getElementById('db-sort');
-            const direction = document.getElementById('db-direction');
-            direction.value = sort.value === column && direction.value === 'asc' ? 'desc' : 'asc';
-            sort.value = column; dbState.offset = 0; loadDatabaseRows();
-        });
-        th.replaceChildren(sortButton);
         headerRow.appendChild(th);
     });
 
@@ -882,13 +734,6 @@ function renderDatabaseTable(data) {
         tr.appendChild(actionTd);
         bodyEl.appendChild(tr);
     });
-    if (!data.rows.length) {
-        const row = document.createElement('tr');
-        const cell = document.createElement('td');
-        cell.colSpan = columns.length + 1;
-        cell.textContent = 'No matching records.';
-        row.appendChild(cell); bodyEl.appendChild(row);
-    }
 }
 
 function updateDatabasePager() {
@@ -899,9 +744,7 @@ function updateDatabasePager() {
 
     const currentPage = Math.floor(dbState.offset / dbState.limit) + 1;
     const totalPages = Math.max(1, Math.ceil(dbState.total / dbState.limit));
-    pageInfo.textContent = `Page ${currentPage} of ${totalPages} · ${dbState.total} records`;
-    document.getElementById('db-prev-btn').disabled = dbState.offset === 0;
-    document.getElementById('db-next-btn').disabled = dbState.offset + dbState.limit >= dbState.total;
+    pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
 }
 
 function openEditModal(row, columns, editable, idField) {
@@ -1090,11 +933,6 @@ function loadHistoricalData() {
             return;
         }
 
-        const coverageSection = document.getElementById('coverage-chart-section');
-        if (coverageSection) {
-            coverageSection.classList.toggle('d-none', cameraData.fruiting_only === true);
-        }
-
         // Clear existing history
         sensorHistory = {
             timestamps: [],
@@ -1135,8 +973,7 @@ function loadHistoricalData() {
                 }
                 
                 // Add or update coverage for this timestamp
-                const coverage = c.analysis == null ? NaN : parseFloat(c.analysis);
-                sensorHistory.coverage[timestampIndex] = Number.isFinite(coverage) ? coverage : null;
+                sensorHistory.coverage[timestampIndex] = parseFloat(c.analysis) || 0;
             });
             
             // Ensure coverage array has the same length as timestamps
@@ -1194,7 +1031,6 @@ function loadHistoryAvailability() {
             historyAvailability = new Map(data.days.map(day => [day.date, day]));
             historyAvailabilityLoadedAt = Date.now();
             renderPhaseCalendar();
-            renderTimelapsePhaseCalendar();
             return historyAvailability;
         })
         .finally(() => { historyAvailabilityRequest = null; });
@@ -1667,15 +1503,8 @@ function loadGrowthPhase() {
                 select.value = data.phase;
             }
             updateGrowthPhaseUi(data.phase === 'stopped');
-            updateLatestCaptureCoverageVisibility(data.phase);
         })
         .catch(error => console.error('Phase error:', error));
-}
-
-function updateLatestCaptureCoverageVisibility(phase) {
-    if (!['colonization', 'fruiting', 'stopped'].includes(phase)) return;
-    const coverage = document.getElementById('latest-capture-coverage');
-    if (coverage) coverage.classList.toggle('d-none', phase !== 'colonization');
 }
 
 function updateGrowthPhaseUi(isStopped) {
@@ -1777,19 +1606,18 @@ function renderPhaseCalendarGrid(gridId, titleId, calendarMonth, selectionMode) 
             ? periods.map(period => phaseDisplayName(period.phase)).join(' / ')
             : 'No recorded phase';
         const dateValue = toCalendarDateValue(date);
-        const records = historyAvailability ? historyAvailability.get(dateValue) : null;
-        const hasData = selectionMode === 'chart' ? Boolean(records) : Boolean(records?.captures);
-        const dataClass = hasData ? 'has-history-data' : '';
-        if (historyAvailability) {
-            tooltip += selectionMode === 'chart'
-                ? (records ? ` · ${records.measurements} mérés, ${records.captures} felvétel` : ' · Nincs mentett mérés vagy felvétel')
-                : (hasData ? ` · ${records.captures} felvétel` : ' · Nincs mentett felvétel');
+        const records = selectionMode === 'chart' && historyAvailability ? historyAvailability.get(dateValue) : null;
+        const dataClass = records ? 'has-history-data' : '';
+        if (selectionMode === 'chart' && historyAvailability) {
+            tooltip += records
+                ? ` · ${records.measurements} mérés, ${records.captures} felvétel`
+                : ' · Nincs mentett mérés vagy felvétel';
         }
         const selectionClass = calendarSelectionClass(date, selectionMode);
         const selectFunction = selectionMode === 'chart' ? 'selectChartCalendarDay' : 'selectTimelapseCalendarDay';
         const selectableAttributes = ` role="button" tabindex="0" data-date="${dateValue}" onclick="${selectFunction}('${dateValue}')" onkeydown="handleCalendarKey(event, '${dateValue}', '${selectionMode}')"`;
         cells.push(
-            `<div class="phase-calendar-day ${phaseClass} ${outsideClass} ${selectionClass} ${dataClass}" title="${escapeHtml(tooltip)}"${selectableAttributes}>${date.getDate()}${hasData ? '<span class="history-data-dot" aria-label="Mentett adat"></span>' : ''}</div>`
+            `<div class="phase-calendar-day ${phaseClass} ${outsideClass} ${selectionClass} ${dataClass}" title="${escapeHtml(tooltip)}"${selectableAttributes}>${date.getDate()}${records ? '<span class="history-data-dot" aria-label="Mentett adat"></span>' : ''}</div>`
         );
     }
     grid.innerHTML = cells.join('');
@@ -1821,33 +1649,21 @@ function selectTimelapseCalendarDay(dateValue) {
     if (!startInput || !endInput) return;
 
     if (timelapseCalendarSelection === 'start') {
-        setCalendarDatePreservingTime(startInput, dateValue, '00:00');
-        const endValue = getDashboardDateInputValue(endInput);
-        if (!endValue || endValue.slice(0, 10) < dateValue) {
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
-        }
+        setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+        setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
         timelapseCalendarSelection = 'end';
     } else {
         const startDay = getDashboardDateInputValue(startInput).slice(0, 10);
-        if (!startDay || dateValue < startDay) {
-            setCalendarDatePreservingTime(startInput, dateValue, '00:00');
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+        if (dateValue < startDay) {
+            setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
         } else {
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
             timelapseCalendarSelection = 'start';
+            closePhaseCalendarPopups();
         }
     }
-    syncCalendarTimeSelectors('timelapse');
     renderTimelapsePhaseCalendar();
-}
-
-function applyTimelapseCalendarRange() {
-    try {
-        buildDateRangePayload();
-        closePhaseCalendarPopups();
-    } catch (error) {
-        setMediaExportStatus(`Időtartomány hiba: ${error.message || error}`, true);
-    }
 }
 
 function selectChartCalendarDay(dateValue) {
@@ -1856,23 +1672,23 @@ function selectChartCalendarDay(dateValue) {
     if (!startInput || !endInput) return;
 
     if (chartCalendarSelection === 'start') {
-        setCalendarDatePreservingTime(startInput, dateValue, '00:00');
+        setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
         const endValue = getDashboardDateInputValue(endInput);
         if (!endValue || endValue.slice(0, 10) < dateValue) {
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
         }
         chartCalendarSelection = 'end';
     } else {
         const startDay = getDashboardDateInputValue(startInput).slice(0, 10);
         if (!startDay || dateValue < startDay) {
-            setCalendarDatePreservingTime(startInput, dateValue, '00:00');
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+            setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
         } else {
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
             chartCalendarSelection = 'start';
+            closePhaseCalendarPopups();
         }
     }
-    syncChartTimeSelectors();
     renderPhaseCalendar();
 }
 
@@ -1926,7 +1742,6 @@ function saveGrowthPhase() {
             return;
         }
         updateGrowthPhaseUi(select.value === 'stopped');
-        updateLatestCaptureCoverageVisibility(select.value);
         alert(select.value === 'stopped'
             ? 'System stopped. The server remains available, but data collection and image capture are disabled.'
             : 'Phase updated successfully!');
@@ -1964,53 +1779,27 @@ function saveSetting(key) {
  * Load system logs
  */
 function loadLogs() {
-    const requestId = ++logRequestSequence;
-    logState.limit = Number(document.getElementById('logs-limit')?.value) || 50;
-    const params = viewerParameters('logs');
-    params.set('paginated', '1');
-    params.set('limit', logState.limit);
-    params.set('offset', logState.offset);
-    return fetch(`${API_BASE}/system/logs?${params}`, { cache: 'no-store' })
+    fetch(`${API_BASE}/system/logs?limit=20`)
         .then(response => response.json())
         .then(data => {
-            if (requestId !== logRequestSequence) return;
-            const alert = document.getElementById('logs-alert');
-            if (data.error) { if (alert) alert.textContent = data.error; return; }
-            if (alert) alert.textContent = '';
-            logState.total = data.total;
-            if (logState.offset > 0 && logState.offset >= logState.total) {
-                logState.offset = Math.max(0, (Math.ceil(logState.total / logState.limit) - 1) * logState.limit);
-                return loadLogs();
-            }
+            if (data.error) return;
 
             let logsHtml = '';
-            data.logs.forEach(log => {
-                const rawTime = log.time || log.timestamp || '';
-                const logDate = new Date(rawTime.replace(' ', 'T'));
-                const timeText = Number.isNaN(logDate.getTime()) ? rawTime : new Intl.DateTimeFormat('hu-HU', {
-                    year: 'numeric', month: '2-digit', day: '2-digit',
-                    hour: '2-digit', minute: '2-digit', second: '2-digit'
-                }).format(logDate);
+            data.forEach(log => {
+                const timeText = log.time || log.timestamp || '';
                 const Badge = getBadgeClass(log.level);
                 logsHtml += `
                     <tr>
-                        <td class="text-nowrap">${escapeHtml(timeText)}</td>
-                        <td><span class="badge ${Badge}">${escapeHtml(log.level)}</span></td>
-                        <td>${escapeHtml(log.source || 'legacy')}</td>
-                        <td style="white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(log.message)}</td>
+                        <td>${timeText}</td>
+                        <td><span class="badge ${Badge}">${log.level}</span></td>
+                        <td>${log.message}</td>
                     </tr>
                 `;
             });
 
-            document.getElementById('logs-table').innerHTML = logsHtml || '<tr><td colspan="4">No matching events.</td></tr>';
-            document.getElementById('logs-page-info').textContent = `Page ${Math.floor(logState.offset / logState.limit) + 1} of ${Math.max(1, Math.ceil(logState.total / logState.limit))} · ${logState.total} events`;
-            document.getElementById('logs-prev').disabled = logState.offset === 0;
-            document.getElementById('logs-next').disabled = logState.offset + logState.limit >= logState.total;
+            document.getElementById('logs-table').innerHTML = logsHtml;
         })
-        .catch(error => {
-            console.error('Logs error:', error);
-            if (requestId === logRequestSequence) document.getElementById('logs-alert').textContent = 'Failed to load events.';
-        });
+        .catch(error => console.error('Logs error:', error));
 }
 
 /**
@@ -2046,8 +1835,6 @@ function checkSystemStatus() {
                 });
                 return;
             }
-
-            updateLatestCaptureCoverageVisibility(data.growth_phase);
 
             if (!data.background_running) {
                 setNavbarSystemStatus({
@@ -2285,7 +2072,7 @@ function captureNow(event) {
             if (data.error) {
                 alert('Error: ' + data.error);
             } else {
-                alert(data.coverage == null ? 'Image captured!' : `Image captured! Coverage: ${data.coverage.toFixed(2)}%`);
+                alert(`Image captured! Coverage: ${data.coverage.toFixed(2)}%`);
                 loadCameraData();
             }
         })

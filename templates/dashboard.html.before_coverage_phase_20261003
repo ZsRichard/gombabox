@@ -116,7 +116,7 @@
                             <div class="card-body text-center d-flex flex-column">
                                 <img id="latest-capture" src="/static/icons/icon.svg" alt="Latest image"
                                      class="img-fluid latest-capture-img">
-                                <div class="mt-3 d-none" id="latest-capture-coverage">
+                                <div class="mt-3">
                                     <strong>Mycelium Coverage:</strong>
                                     <div class="progress mt-2">
                                         <div id="coverage-bar" class="progress-bar bg-success" role="progressbar"
@@ -152,6 +152,60 @@
                                 <div class="sensor-value" id="light-value">--</div>
                                 <div class="sensor-unit">lux</div>
                                 <div class="sensor-label">Current Reading</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Timelapse Creator -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="fas fa-film"></i> Timelapse Creator
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3 align-items-end">
+                                    <div class="col-md-3">
+                                        <label for="timelapse-start-date" class="form-label">Start time</label>
+                                        <input type="text" class="form-control custom-calendar-input" id="timelapse-start-date" readonly autocomplete="off" aria-haspopup="dialog">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="timelapse-end-date" class="form-label">End time</label>
+                                        <input type="text" class="form-control custom-calendar-input" id="timelapse-end-date" readonly autocomplete="off" aria-haspopup="dialog">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label for="timelapse-fps" class="form-label">FPS</label>
+                                        <input type="number" min="1" max="60" step="1" value="15" class="form-control" id="timelapse-fps">
+                                    </div>
+                                    <div class="col-md-3 d-flex">
+                                        <button class="btn btn-primary w-100" id="generate-timelapse-btn" onclick="generateTimelapse()">
+                                            <i class="fas fa-wand-magic-sparkles"></i> Build
+                                        </button>
+                                    </div>
+                                </div>
+                                <div id="media-export-status" class="alert alert-custom alert-info-custom mt-3 d-none"></div>
+                                <div id="timelapse-result" class="alert alert-custom alert-info-custom mt-3 d-none">
+                                    Timelapse ready:
+                                    <a id="timelapse-link" href="#" target="_blank" rel="noopener">Open video</a>
+                                </div>
+                                <div class="phase-help mt-3">
+                                    <span class="phase-legend phase-colonization">Incubation</span>
+                                    <span class="phase-legend phase-fruiting">Fruiting</span>
+                                    <small class="text-muted d-block mt-1">Select the start day, then the end day.</small>
+                                    <div class="phase-calendar phase-calendar-popup mt-3" id="timelapse-calendar-popup" aria-label="Timelapse growth phase calendar" aria-hidden="true">
+                                        <div class="phase-calendar-header">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="timelapse-calendar-prev" aria-label="Previous timelapse month">
+                                                <i class="fas fa-chevron-left"></i>
+                                            </button>
+                                            <strong id="timelapse-calendar-title"></strong>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="timelapse-calendar-next" aria-label="Next timelapse month">
+                                                <i class="fas fa-chevron-right"></i>
+                                            </button>
+                                        </div>
+                                        <div class="phase-calendar-grid" id="timelapse-calendar-grid"></div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -212,25 +266,6 @@
                                             </button>
                                         </div>
                                         <div class="phase-calendar-grid" id="phase-calendar-grid"></div>
-                                        <div class="row g-2 mt-2 pt-2 border-top">
-                                            <div class="col-sm-6">
-                                                <span class="form-label d-block mb-1">Kezdési idő</span>
-                                                <div class="d-flex align-items-center gap-1">
-                                                    <select id="chart-start-hour" class="form-select form-select-sm" aria-label="Kezdés órája"></select><span>:</span>
-                                                    <select id="chart-start-minute" class="form-select form-select-sm" aria-label="Kezdés perce"></select>
-                                                </div>
-                                            </div>
-                                            <div class="col-sm-6">
-                                                <span class="form-label d-block mb-1">Befejezési idő</span>
-                                                <div class="d-flex align-items-center gap-1">
-                                                    <select id="chart-end-hour" class="form-select form-select-sm" aria-label="Befejezés órája"></select><span>:</span>
-                                                    <select id="chart-end-minute" class="form-select form-select-sm" aria-label="Befejezés perce"></select>
-                                                </div>
-                                            </div>
-                                            <div class="col-12 d-flex justify-content-end">
-                                                <button type="button" class="btn btn-primary btn-sm" onclick="applyCustomChartRange()">Alkalmazás</button>
-                                            </div>
-                                        </div>
                                         <small class="text-muted d-block mt-2"><span class="history-data-dot" aria-hidden="true"></span> Mentett mérés vagy felvétel. A háttérszín a termesztési fázist jelöli.</small>
                                     </div>
                                 </div>
@@ -240,7 +275,7 @@
                 </div>
 
                 <!-- Coverage Trend Chart -->
-                <div class="row mt-4" id="coverage-chart-section">
+                <div class="row mt-4">
                     <div class="col-12">
                         <div class="card">
                             <div class="card-header">
@@ -386,79 +421,6 @@
                         </div>
                     </div>
                 </div>
-                <!-- Timelapse Creator -->
-                <div class="row mt-4">
-                    <div class="col-12">
-                        <div class="card">
-                            <div class="card-header">
-                                <i class="fas fa-film"></i> Timelapse Creator
-                            </div>
-                            <div class="card-body">
-                                <div class="row g-3 align-items-end">
-                                    <div class="col-md-3">
-                                        <label for="timelapse-start-date" class="form-label">Start time</label>
-                                        <input type="text" class="form-control custom-calendar-input" id="timelapse-start-date" readonly autocomplete="off" aria-haspopup="dialog">
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label for="timelapse-end-date" class="form-label">End time</label>
-                                        <input type="text" class="form-control custom-calendar-input" id="timelapse-end-date" readonly autocomplete="off" aria-haspopup="dialog">
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label for="timelapse-fps" class="form-label">FPS</label>
-                                        <input type="number" min="1" max="60" step="1" value="15" class="form-control" id="timelapse-fps">
-                                    </div>
-                                    <div class="col-md-3 d-flex">
-                                        <button class="btn btn-primary w-100" id="generate-timelapse-btn" onclick="generateTimelapse()">
-                                            <i class="fas fa-wand-magic-sparkles"></i> Build
-                                        </button>
-                                    </div>
-                                </div>
-                                <div id="media-export-status" class="alert alert-custom alert-info-custom mt-3 d-none"></div>
-                                <div id="timelapse-result" class="alert alert-custom alert-info-custom mt-3 d-none">
-                                    Timelapse ready:
-                                    <a id="timelapse-link" href="#" target="_blank" rel="noopener">Open video</a>
-                                </div>
-                                <div class="phase-help mt-3">
-                                    <span class="phase-legend phase-colonization">Incubation</span>
-                                    <span class="phase-legend phase-fruiting">Fruiting</span>
-                                    <small class="text-muted d-block mt-1">Válassz kezdő és záró napot, majd állítsd be az órát és a percet.</small>
-                                    <div class="phase-calendar phase-calendar-popup mt-3" id="timelapse-calendar-popup" aria-label="Timelapse growth phase calendar" aria-hidden="true">
-                                        <div class="phase-calendar-header">
-                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="timelapse-calendar-prev" aria-label="Previous timelapse month">
-                                                <i class="fas fa-chevron-left"></i>
-                                            </button>
-                                            <strong id="timelapse-calendar-title"></strong>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary" id="timelapse-calendar-next" aria-label="Next timelapse month">
-                                                <i class="fas fa-chevron-right"></i>
-                                            </button>
-                                        </div>
-                                        <div class="phase-calendar-grid" id="timelapse-calendar-grid"></div>
-                                        <div class="row g-2 mt-2 pt-2 border-top">
-                                            <div class="col-sm-6">
-                                                <span class="small text-muted">Kezdési idő</span>
-                                                <div class="d-flex align-items-center gap-1">
-                                                    <select id="timelapse-start-hour" class="form-select form-select-sm" aria-label="Time-lapse kezdés órája"></select><span>:</span>
-                                                    <select id="timelapse-start-minute" class="form-select form-select-sm" aria-label="Time-lapse kezdés perce"></select>
-                                                </div>
-                                            </div>
-                                            <div class="col-sm-6">
-                                                <span class="small text-muted">Befejezési idő</span>
-                                                <div class="d-flex align-items-center gap-1">
-                                                    <select id="timelapse-end-hour" class="form-select form-select-sm" aria-label="Time-lapse befejezés órája"></select><span>:</span>
-                                                    <select id="timelapse-end-minute" class="form-select form-select-sm" aria-label="Time-lapse befejezés perce"></select>
-                                                </div>
-                                            </div>
-                                            <div class="col-12 d-flex justify-content-end">
-                                                <button type="button" class="btn btn-primary btn-sm" onclick="applyTimelapseCalendarRange()">Alkalmazás</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
             </div>
 
             <!-- Controls Tab -->
@@ -540,37 +502,18 @@
                                 <i class="fas fa-list"></i> System Logs
                             </div>
                             <div class="card-body">
-                                <details class="mb-3 text-muted small">
-                                    <summary>Mi és mikor kerül a naplóba?</summary>
-                                    <p class="mt-2 mb-1">A vezérlő az eszközök kapcsolását, az impulzusok okát és a képrögzítést naplózza. A szenzorok és a kamera a csatlakozást és a hibákat jelzik. A szerver az indulást, a beállítások módosítását és a kézi műveleteket rögzíti.</p>
-                                    <p class="mb-0">INFO: normál esemény. WARNING: figyelmeztetés. ERROR: sikertelen művelet. A mérések a measurements táblába kerülnek, nem külön naplóbejegyzésként. Az azonos hibák egy percen belüli ismétléseit csak a Pi szolgáltatásnaplója tartalmazza. A legacy bejegyzések régebbiek, forrásuk nincs eltárolva.</p>
-                                </details>
-                                <div class="row g-2 mb-3">
-                                    <div class="col-md-6"><label for="logs-search" class="form-label">Search</label><input type="search" id="logs-search" class="form-control" maxlength="200" placeholder="Message or source..."></div>
-                                    <div class="col-md-3"><label for="logs-level" class="form-label">Level</label><select id="logs-level" class="form-select"><option value="">All levels</option><option>INFO</option><option>WARNING</option><option>ERROR</option><option>CRITICAL</option></select></div>
-                                    <div class="col-md-3"><label for="logs-source" class="form-label">Source</label><select id="logs-source" class="form-select"><option value="">All sources</option><option>controller</option><option>sensors</option><option>camera</option><option>relays</option><option>server</option><option>storage</option><option>image-analysis</option><option>notifications</option><option>legacy</option></select></div>
-                                    <div class="col-md-3"><label for="logs-start" class="form-label">From</label><input type="datetime-local" id="logs-start" class="form-control"></div>
-                                    <div class="col-md-3"><label for="logs-end" class="form-label">To</label><input type="datetime-local" id="logs-end" class="form-control"></div>
-                                    <div class="col-md-3"><label for="logs-sort" class="form-label">Sort by</label><select id="logs-sort" class="form-select"><option value="timestamp">Time</option><option value="level">Level</option><option value="source">Source</option><option value="id">ID</option></select></div>
-                                    <div class="col-md-3"><label for="logs-direction" class="form-label">Order</label><select id="logs-direction" class="form-select"><option value="desc">Descending</option><option value="asc">Ascending</option></select></div>
-                                    <div class="col-md-4"><label for="logs-limit" class="form-label">Rows per page</label><select id="logs-limit" class="form-select"><option>50</option><option>100</option><option>200</option></select></div>
-                                    <div class="col-md-8 d-flex gap-2 align-items-end"><button id="logs-apply" class="btn btn-primary">Apply / Refresh</button><button id="logs-reset" class="btn btn-outline-secondary">Reset filters</button></div>
-                                </div>
-                                <div id="logs-alert" class="text-danger small mb-2" role="status"></div>
-                                <div class="table-responsive"><table class="table table-hover" style="min-width:720px">
+                                <table class="table table-hover">
                                     <thead>
                                         <tr>
                                             <th>Timestamp</th>
                                             <th>Level</th>
-                                            <th>Source</th>
                                             <th>Message</th>
                                         </tr>
                                     </thead>
                                     <tbody id="logs-table">
                                         <!-- Logs will be loaded here -->
                                     </tbody>
-                                </table></div>
-                                <div class="d-flex justify-content-between align-items-center mt-3"><button id="logs-prev" class="btn btn-outline-secondary">Prev</button><span id="logs-page-info" aria-live="polite"></span><button id="logs-next" class="btn btn-outline-secondary">Next</button></div>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -604,17 +547,6 @@
                                             <i class="fas fa-sync"></i> Refresh
                                         </button>
                                     </div>
-                                </div>
-                                <div class="row g-2 mt-2">
-                                    <div class="col-md-6"><label for="db-search" class="form-label">Search all columns</label><input type="search" id="db-search" class="form-control" maxlength="200"></div>
-                                    <div class="col-md-3"><label for="db-sort" class="form-label">Sort by</label><select id="db-sort" class="form-select"></select></div>
-                                    <div class="col-md-3"><label for="db-direction" class="form-label">Order</label><select id="db-direction" class="form-select"><option value="desc">Descending</option><option value="asc">Ascending</option></select></div>
-                                    <div class="col-md-3"><label for="db-filter-column" class="form-label">Filter column</label><select id="db-filter-column" class="form-select"></select></div>
-                                    <div class="col-md-3"><label for="db-filter-op" class="form-label">Condition</label><select id="db-filter-op" class="form-select"><option value="eq">Equals</option><option value="contains">Contains</option><option value="gte">At least</option><option value="lte">At most</option><option value="null">Empty (NULL)</option><option value="notnull">Not empty</option></select></div>
-                                    <div class="col-md-6"><label for="db-filter-value" class="form-label">Value</label><input type="text" id="db-filter-value" class="form-control"></div>
-                                    <div class="col-md-4"><label for="db-start" class="form-label">From</label><input type="datetime-local" id="db-start" class="form-control"></div>
-                                    <div class="col-md-4"><label for="db-end" class="form-label">To</label><input type="datetime-local" id="db-end" class="form-control"></div>
-                                    <div class="col-md-4 d-flex gap-2 align-items-end"><button id="db-apply" class="btn btn-primary">Apply</button><button id="db-reset" class="btn btn-outline-secondary">Reset filters</button></div>
                                 </div>
                                 <div id="db-alert" class="alert alert-warning-custom mt-3" style="display:none"></div>
                                 <div class="table-responsive mt-3">
@@ -694,7 +626,7 @@
     
     <!-- PWA Diagnostic Panel -->
     <!-- Frontend JavaScript -->
-    <script src="/static/js/dashboard.js?v=21"></script>
+    <script src="/static/js/dashboard.js?v=13"></script>
     <script src="/static/js/notifications.js?v=5"></script>
 </body>
 </html>

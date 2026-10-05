@@ -146,7 +146,6 @@ function initializeMediaExportDates() {
 
     setDashboardDateInputValue(startInput, toDateTimeLocalInputValue(start));
     setDashboardDateInputValue(endInput, toDateTimeLocalInputValue(now));
-    initializeCalendarTimeSelectors('timelapse');
 
     const previousMonthButton = document.getElementById('timelapse-calendar-prev');
     const nextMonthButton = document.getElementById('timelapse-calendar-next');
@@ -179,16 +178,14 @@ function initializePhaseCalendarPopovers() {
                     timelapseCalendarMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
                 }
                 renderTimelapsePhaseCalendar();
-                syncCalendarTimeSelectors('timelapse');
             } else {
                 chartCalendarSelection = selection;
                 if (!Number.isNaN(selectedDate.getTime())) {
                     phaseCalendarMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
                 }
                 renderPhaseCalendar();
-                syncChartTimeSelectors();
+                loadHistoryAvailability().catch(error => console.warn('Calendar availability:', error));
             }
-            loadHistoryAvailability().catch(error => console.warn('Calendar availability:', error));
             openPhaseCalendarPopup(popupId);
         };
         input.addEventListener('click', openForInput);
@@ -315,64 +312,9 @@ function initializeCustomChartRange() {
     const previousMonthButton = document.getElementById('phase-calendar-prev');
     const nextMonthButton = document.getElementById('phase-calendar-next');
     setCustomChartIntervalFromHours(24);
-    initializeChartTimeSelectors();
     if (applyButton) applyButton.addEventListener('click', applyCustomChartRange);
     if (previousMonthButton) previousMonthButton.addEventListener('click', () => shiftPhaseCalendarMonth(-1));
     if (nextMonthButton) nextMonthButton.addEventListener('click', () => shiftPhaseCalendarMonth(1));
-}
-
-function initializeChartTimeSelectors() {
-    initializeCalendarTimeSelectors('chart');
-}
-
-function initializeCalendarTimeSelectors(prefix) {
-    ['start', 'end'].forEach(bound => {
-        ['hour', 'minute'].forEach(unit => {
-            const select = document.getElementById(`${prefix}-${bound}-${unit}`);
-            if (!select) return;
-            const count = unit === 'hour' ? 24 : 60;
-            select.innerHTML = Array.from({ length: count }, (_, value) => {
-                const number = String(value).padStart(2, '0');
-                return `<option value="${number}">${number}</option>`;
-            }).join('');
-            select.addEventListener('change', () => updateCalendarTime(prefix, bound));
-        });
-    });
-    syncCalendarTimeSelectors(prefix);
-}
-
-function syncChartTimeSelectors() {
-    syncCalendarTimeSelectors('chart');
-}
-
-function syncCalendarTimeSelectors(prefix) {
-    ['start', 'end'].forEach(bound => {
-        const value = getDashboardDateInputValue(document.getElementById(`${prefix}-${bound}-date`));
-        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return;
-        const hour = document.getElementById(`${prefix}-${bound}-hour`);
-        const minute = document.getElementById(`${prefix}-${bound}-minute`);
-        if (hour) hour.value = value.slice(11, 13);
-        if (minute) minute.value = value.slice(14, 16);
-    });
-}
-
-function updateChartTime(bound) {
-    updateCalendarTime('chart', bound);
-}
-
-function updateCalendarTime(prefix, bound) {
-    const input = document.getElementById(`${prefix}-${bound}-date`);
-    const value = getDashboardDateInputValue(input);
-    const hour = document.getElementById(`${prefix}-${bound}-hour`)?.value;
-    const minute = document.getElementById(`${prefix}-${bound}-minute`)?.value;
-    if (!value || !/^([01]\d|2[0-3])$/.test(hour) || !/^[0-5]\d$/.test(minute)) return;
-    setDashboardDateInputValue(input, `${value.slice(0, 10)}T${hour}:${minute}`);
-}
-
-function setCalendarDatePreservingTime(input, dateValue, fallbackTime) {
-    const value = getDashboardDateInputValue(input);
-    const time = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) ? value.slice(11, 16) : fallbackTime;
-    setDashboardDateInputValue(input, `${dateValue}T${time}`);
 }
 
 function setCustomChartIntervalFromHours(hours) {
@@ -1194,7 +1136,6 @@ function loadHistoryAvailability() {
             historyAvailability = new Map(data.days.map(day => [day.date, day]));
             historyAvailabilityLoadedAt = Date.now();
             renderPhaseCalendar();
-            renderTimelapsePhaseCalendar();
             return historyAvailability;
         })
         .finally(() => { historyAvailabilityRequest = null; });
@@ -1777,19 +1718,18 @@ function renderPhaseCalendarGrid(gridId, titleId, calendarMonth, selectionMode) 
             ? periods.map(period => phaseDisplayName(period.phase)).join(' / ')
             : 'No recorded phase';
         const dateValue = toCalendarDateValue(date);
-        const records = historyAvailability ? historyAvailability.get(dateValue) : null;
-        const hasData = selectionMode === 'chart' ? Boolean(records) : Boolean(records?.captures);
-        const dataClass = hasData ? 'has-history-data' : '';
-        if (historyAvailability) {
-            tooltip += selectionMode === 'chart'
-                ? (records ? ` · ${records.measurements} mérés, ${records.captures} felvétel` : ' · Nincs mentett mérés vagy felvétel')
-                : (hasData ? ` · ${records.captures} felvétel` : ' · Nincs mentett felvétel');
+        const records = selectionMode === 'chart' && historyAvailability ? historyAvailability.get(dateValue) : null;
+        const dataClass = records ? 'has-history-data' : '';
+        if (selectionMode === 'chart' && historyAvailability) {
+            tooltip += records
+                ? ` · ${records.measurements} mérés, ${records.captures} felvétel`
+                : ' · Nincs mentett mérés vagy felvétel';
         }
         const selectionClass = calendarSelectionClass(date, selectionMode);
         const selectFunction = selectionMode === 'chart' ? 'selectChartCalendarDay' : 'selectTimelapseCalendarDay';
         const selectableAttributes = ` role="button" tabindex="0" data-date="${dateValue}" onclick="${selectFunction}('${dateValue}')" onkeydown="handleCalendarKey(event, '${dateValue}', '${selectionMode}')"`;
         cells.push(
-            `<div class="phase-calendar-day ${phaseClass} ${outsideClass} ${selectionClass} ${dataClass}" title="${escapeHtml(tooltip)}"${selectableAttributes}>${date.getDate()}${hasData ? '<span class="history-data-dot" aria-label="Mentett adat"></span>' : ''}</div>`
+            `<div class="phase-calendar-day ${phaseClass} ${outsideClass} ${selectionClass} ${dataClass}" title="${escapeHtml(tooltip)}"${selectableAttributes}>${date.getDate()}${records ? '<span class="history-data-dot" aria-label="Mentett adat"></span>' : ''}</div>`
         );
     }
     grid.innerHTML = cells.join('');
@@ -1821,33 +1761,21 @@ function selectTimelapseCalendarDay(dateValue) {
     if (!startInput || !endInput) return;
 
     if (timelapseCalendarSelection === 'start') {
-        setCalendarDatePreservingTime(startInput, dateValue, '00:00');
-        const endValue = getDashboardDateInputValue(endInput);
-        if (!endValue || endValue.slice(0, 10) < dateValue) {
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
-        }
+        setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+        setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
         timelapseCalendarSelection = 'end';
     } else {
         const startDay = getDashboardDateInputValue(startInput).slice(0, 10);
-        if (!startDay || dateValue < startDay) {
-            setCalendarDatePreservingTime(startInput, dateValue, '00:00');
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+        if (dateValue < startDay) {
+            setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
         } else {
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
             timelapseCalendarSelection = 'start';
+            closePhaseCalendarPopups();
         }
     }
-    syncCalendarTimeSelectors('timelapse');
     renderTimelapsePhaseCalendar();
-}
-
-function applyTimelapseCalendarRange() {
-    try {
-        buildDateRangePayload();
-        closePhaseCalendarPopups();
-    } catch (error) {
-        setMediaExportStatus(`Időtartomány hiba: ${error.message || error}`, true);
-    }
 }
 
 function selectChartCalendarDay(dateValue) {
@@ -1856,23 +1784,23 @@ function selectChartCalendarDay(dateValue) {
     if (!startInput || !endInput) return;
 
     if (chartCalendarSelection === 'start') {
-        setCalendarDatePreservingTime(startInput, dateValue, '00:00');
+        setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
         const endValue = getDashboardDateInputValue(endInput);
         if (!endValue || endValue.slice(0, 10) < dateValue) {
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
         }
         chartCalendarSelection = 'end';
     } else {
         const startDay = getDashboardDateInputValue(startInput).slice(0, 10);
         if (!startDay || dateValue < startDay) {
-            setCalendarDatePreservingTime(startInput, dateValue, '00:00');
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+            setDashboardDateInputValue(startInput, `${dateValue}T00:00`);
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
         } else {
-            setCalendarDatePreservingTime(endInput, dateValue, '23:59');
+            setDashboardDateInputValue(endInput, `${dateValue}T23:59`);
             chartCalendarSelection = 'start';
+            closePhaseCalendarPopups();
         }
     }
-    syncChartTimeSelectors();
     renderPhaseCalendar();
 }
 
@@ -1985,12 +1913,7 @@ function loadLogs() {
 
             let logsHtml = '';
             data.logs.forEach(log => {
-                const rawTime = log.time || log.timestamp || '';
-                const logDate = new Date(rawTime.replace(' ', 'T'));
-                const timeText = Number.isNaN(logDate.getTime()) ? rawTime : new Intl.DateTimeFormat('hu-HU', {
-                    year: 'numeric', month: '2-digit', day: '2-digit',
-                    hour: '2-digit', minute: '2-digit', second: '2-digit'
-                }).format(logDate);
+                const timeText = formatHungarianDateTime(log.time || log.timestamp);
                 const Badge = getBadgeClass(log.level);
                 logsHtml += `
                     <tr>

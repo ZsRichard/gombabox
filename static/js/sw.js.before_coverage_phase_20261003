@@ -1,9 +1,9 @@
-const CACHE_NAME = 'gombabox-shell-v29';
+const CACHE_NAME = 'gombabox-shell-v20';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
   '/static/css/styles.css?v=15',
-  '/static/js/dashboard.js?v=21',
+  '/static/js/dashboard.js?v=13',
   '/static/js/notifications.js?v=5',
   '/static/icons/icon.svg',
   '/static/icons/icon-192.png',
